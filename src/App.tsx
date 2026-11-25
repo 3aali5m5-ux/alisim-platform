@@ -1376,8 +1376,39 @@ export default function App() {
       if (!res.ok) {
         return { ok: false, message: data.error || 'تعذر تسجيل طلب الشحن اليدوي.' };
       }
+      let isAutoApprovedFromWebhook = false;
       if (data.topUp || data.request) {
         createdReq = data.topUp || data.request;
+      }
+      if (data.autoApproved === true) {
+        isAutoApprovedFromWebhook = true;
+        if (typeof data.newBalanceUsd === 'number') {
+          setWalletUsd(data.newBalanceUsd);
+        } else {
+          setWalletUsd((prev) => Number((prev + createdReq.equivalentUsd).toFixed(2)));
+        }
+      }
+
+      if (isAutoApprovedFromWebhook) {
+        setTopUpRequests((prev) => [createdReq, ...prev.filter((r) => r.id !== createdReq.id)]);
+        appendActivityLog({
+          type: 'TOPUP_APPROVE',
+          titleAr: `شحن فوري تلقائي عبر ${gateway.nameAr}`,
+          detailsAr: `تمت مطابقة الحوالة #${cleanRef} بقيمة $${createdReq.equivalentUsd.toFixed(2)} وإضافة الرصيد فوراً`,
+          amountUsd: createdReq.equivalentUsd,
+        });
+        pushNotification(
+          'wallet',
+          `تم شحن رصيدك فوراً ($${createdReq.equivalentUsd.toFixed(2)})`,
+          `تمت مطابقة حوالتك #${cleanRef} تلقائياً عبر ${gateway.nameAr}.`,
+          'success'
+        );
+        showToast('success', `تمت مطابقة حوالتك وشحن $${createdReq.equivalentUsd.toFixed(2)} فوراً!`);
+        return {
+          ok: true,
+          isAutoVerified: true,
+          message: `تم التحقق الفوري من الحوالة (#${cleanRef}) وإضافة $${createdReq.equivalentUsd.toFixed(2)} USD إلى محفظتك بنجاح!`,
+        };
       }
     } catch {
       // Keep local fallback if offline

@@ -2635,18 +2635,56 @@ app.post('/api/topups', (req, res) => {
     createdAt: Date.now(),
   };
 
+  // Check if ShamCash MacroDroid webhook already received this transfer as UNCLAIMED
+  const isShamCashGateway =
+    /sham|شام/i.test(record.gatewayId) || /sham|شام/i.test(record.gatewayNameAr);
+  let autoApproved = false;
+  let newBalanceUsd: number | undefined;
+
+  if (isShamCashGateway) {
+    const incoming = verifiedIncomingShamCashPool.get(normRef);
+    if (incoming && incoming.status === 'UNCLAIMED') {
+      const sameCurrencyMatch =
+        record.currencyOriginal === incoming.currency &&
+        Math.abs(record.amountOriginal - incoming.amount) <= Math.max(0.01, incoming.amount * 0.01);
+      const usdTolerance = Math.max(0.05, incoming.equivalentUsd * 0.02);
+      if (sameCurrencyMatch || Math.abs(record.equivalentUsd - incoming.equivalentUsd) <= usdTolerance) {
+        incoming.status = 'CLAIMED';
+        incoming.matchedTopUpId = record.id;
+        incoming.claimedByUserId = record.userId;
+        incoming.claimedAt = Date.now();
+        persistShamCashTransfers();
+
+        record.status = 'APPROVED';
+        record.equivalentUsd = Number(incoming.equivalentUsd.toFixed(2));
+        record.equivalentSyp = Math.round(record.equivalentUsd * serverConfig.usdToSypRate);
+        record.processedAt = Date.now();
+        record.reviewedBy = 'ShamCash Webhook Auto-Match';
+
+        userWalletUsd = Number((userWalletUsd + record.equivalentUsd).toFixed(2));
+        if (authUser) {
+          authUser.balanceUsd = Number((authUser.balanceUsd + record.equivalentUsd).toFixed(2));
+          newBalanceUsd = authUser.balanceUsd;
+        } else {
+          newBalanceUsd = userWalletUsd;
+        }
+        autoApproved = true;
+      }
+    }
+  }
+
   usedReferenceRegistry.set(normRef, {
     userId: record.userId,
     userNameAr: record.userNameAr,
     gatewayId: record.gatewayId,
-    status: 'PENDING',
+    status: autoApproved ? 'APPROVED' : 'PENDING',
     createdAt: record.createdAt,
   });
   usedPaymentReferences.add(cleanRef);
   persistUsedReferences();
 
   serverTopUpRequests.unshift(record);
-  res.json({ topUp: record });
+  res.json({ topUp: record, autoApproved, newBalanceUsd });
 });
 
 app.post('/api/topups/:id/review', requireStaff, (req, res) => {
@@ -3715,11 +3753,215 @@ function getInvoiceOwnerKey(req: express.Request, authUser: AuthRecord | null): 
   return `guest:${req.ip || 'unknown'}`;
 }
 
+interface IncomingShamCashTransfer {
+  id: string;
+  transactionId: string;
+  normalizedTxId: string;
+  amount: number;
+  currency: 'USD' | 'SYP' | 'TRY';
+  equivalentUsd: number;
+  rawText: string;
+  sourceApp: string;
+  status: 'UNCLAIMED' | 'CLAIMED';
+  matchedTopUpId?: string;
+  claimedByUserId?: string;
+  receivedAt: number;
+  claimedAt?: number;
+}
+
+const SHAMCASH_TRANSFERS_PATH = path.join(DATA_DIR, 'shamcash-transfers.json');
 const paymentVerifyRateMap = new Map<string, { count: number; resetAt: number }>();
-const verifiedIncomingShamCashPool = new Map<
-  string,
-  { amount: number; currency: string; receivedAt: number }
->();
+const verifiedIncomingShamCashPool = new Map<string, IncomingShamCashTransfer>(
+  Object.entries(
+    readJsonFileSafe<Record<string, IncomingShamCashTransfer>>(SHAMCASH_TRANSFERS_PATH, {})
+  )
+);
+
+function persistShamCashTransfers() {
+  writeJsonFileSafe(
+    SHAMCASH_TRANSFERS_PATH,
+    Object.fromEntries(verifiedIncomingShamCashPool.entries())
+  );
+}
+
+function normalizeArabicDigits(input: string): string {
+  const ar = '٠١٢٣٤٥٦٧٨٩';
+  const fa = '۰۱۲۳۴۵۶۷۸۹';
+  let out = '';
+  for (const ch of input) {
+    const idxAr = ar.indexOf(ch);
+    if (idxAr !== -1) {
+      out += String(idxAr);
+      continue;
+    }
+    const idxFa = fa.indexOf(ch);
+    if (idxFa !== -1) {
+      out += String(idxFa);
+      continue;
+    }
+    if (ch === '٫') out += '.';
+    else if (ch === '٬') out += ',';
+    else out += ch;
+  }
+  return out;
+}
+
+function parseShamCashAmountValue(rawNum: string): number | null {
+  const cleaned = rawNum.trim().replace(/\s+/g, '');
+  if (!cleaned) return null;
+  let normalized = cleaned;
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(cleaned)) {
+    normalized = cleaned.replace(/,/g, '');
+  } else if (/^\d+,\d{1,2}$/.test(cleaned)) {
+    normalized = cleaned.replace(',', '.');
+  } else {
+    normalized = cleaned.replace(/,/g, '');
+  }
+  const val = Number(normalized);
+  if (!Number.isFinite(val) || val <= 0 || val > 100_000_000) return null;
+  return val;
+}
+
+function detectShamCashCurrency(raw: string): 'USD' | 'SYP' | 'TRY' {
+  if (/SYP|ل\.?\s*س|ليرة\s*سوري|ليره\s*سوري|سوري/i.test(raw)) return 'SYP';
+  if (/TRY|TL|₺|ل\.?\s*ت|ليرة\s*تركي|ليره\s*تركي|تركي/i.test(raw)) return 'TRY';
+  return 'USD';
+}
+
+function parseShamCashNotificationPayload(body: Record<string, any>):
+  | {
+      ok: true;
+      transactionId: string;
+      normalizedTxId: string;
+      amount: number;
+      currency: 'USD' | 'SYP' | 'TRY';
+      rawText: string;
+      sourceApp: string;
+    }
+  | { ok: false; code: string; error: string } {
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  const rawInput =
+    typeof body.raw_text === 'string'
+      ? body.raw_text.trim()
+      : typeof body.text === 'string'
+      ? body.text.trim()
+      : '';
+  const sourceApp =
+    typeof body.app_name === 'string' && body.app_name.trim()
+      ? body.app_name.trim().slice(0, 120)
+      : 'MacroDroid';
+  const combinedRaw = [title, rawInput].filter(Boolean).join(' | ').slice(0, 2000);
+  const normText = normalizeArabicDigits(combinedRaw);
+
+  let txId =
+    typeof body.transaction_id === 'string'
+      ? normalizeArabicDigits(body.transaction_id).trim()
+      : typeof body.reference_id === 'string'
+      ? normalizeArabicDigits(body.reference_id).trim()
+      : typeof body.referenceId === 'string'
+      ? normalizeArabicDigits(body.referenceId).trim()
+      : '';
+
+  let amount: number | null = null;
+  if (typeof body.amount === 'number' && Number.isFinite(body.amount) && body.amount > 0) {
+    amount = body.amount;
+  } else if (typeof body.amount === 'string' && body.amount.trim()) {
+    amount = parseShamCashAmountValue(normalizeArabicDigits(body.amount));
+  }
+
+  let currency: 'USD' | 'SYP' | 'TRY' =
+    typeof body.currency === 'string' && body.currency.trim()
+      ? detectShamCashCurrency(body.currency)
+      : detectShamCashCurrency(normText);
+
+  if (
+    !txId &&
+    amount === null &&
+    normText &&
+    /(تم\s+إرسال\s+حوالة|تم\s+ارسال\s+حوالة|قمت\s+بتحويل|رمز\s+التحقق|كود\s+التحقق|OTP\s+code|you\s+sent\s+)/i.test(
+      normText
+    )
+  ) {
+    return {
+      ok: false,
+      code: 'IGNORED_NON_CREDIT_NOTIFICATION',
+      error: 'إشعار صادر أو رمز تحقق غير متعلق باستلام حوالة.',
+    };
+  }
+
+  if (!txId && normText) {
+    const labeledTxPatterns: RegExp[] = [
+      /(?:رقم\s*(?:العملية|الحوالة|التحويل|المرجع|الاشعار|الإشعار|المعاملة)|المرجع|العملية)\s*[:：#\-]?\s*([A-Z0-9][A-Z0-9_-]{3,40})/i,
+      /(?:transaction\s*(?:id|no|number|#)?|tx\s*(?:id|#)?|ref(?:erence)?\s*(?:id|no|#)?|order\s*(?:id|#)?)\s*[:：#\-]?\s*([A-Z0-9][A-Z0-9_-]{3,40})/i,
+      /#([A-Z0-9][A-Z0-9_-]{4,40})/i,
+    ];
+    for (const pattern of labeledTxPatterns) {
+      const m = normText.match(pattern);
+      if (m?.[1]) {
+        txId = m[1].trim();
+        break;
+      }
+    }
+  }
+
+  if (amount === null && normText) {
+    const amountPatterns: RegExp[] = [
+      /(\d[\d,]*(?:\.\d{1,4})?)\s*(USD|USDT|\$|دولار|د\.?\s*أ|SYP|ل\.?\s*س|ليرة\s*سوري(?:ة)?|ليره\s*سوري(?:ة)?|TRY|TL|₺|ل\.?\s*ت|ليرة\s*تركي(?:ة)?)/i,
+      /(USD|USDT|\$|SYP|TRY|TL|₺)\s*(\d[\d,]*(?:\.\d{1,4})?)/i,
+      /(?:بمبلغ|بقيمة|مبلغ|قيمة|amount|received|استلام|تحويل)\s*[:：]?\s*(\d[\d,]*(?:\.\d{1,4})?)/i,
+    ];
+    for (const pattern of amountPatterns) {
+      const m = normText.match(pattern);
+      if (!m) continue;
+      const numCandidate = /^\d/.test(m[1]) ? m[1] : m[2];
+      const currCandidate = /^\d/.test(m[1]) ? m[2] : m[1];
+      const parsed = numCandidate ? parseShamCashAmountValue(numCandidate) : null;
+      if (parsed !== null) {
+        amount = parsed;
+        if (currCandidate) currency = detectShamCashCurrency(currCandidate);
+        break;
+      }
+    }
+  }
+
+  if (!txId && normText) {
+    const amountDigits = amount !== null ? String(Math.trunc(amount)) : '';
+    const candidates = normText.match(/\b[A-Z]{0,4}\d{6,20}\b/gi) || [];
+    for (const c of candidates) {
+      const clean = c.trim();
+      if (clean !== amountDigits && !/^09\d{8}$/.test(clean) && !/^9639\d{8}$/.test(clean)) {
+        txId = clean;
+        break;
+      }
+    }
+  }
+
+  const normalizedTxId = txId.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!normalizedTxId || normalizedTxId.length < 4 || normalizedTxId.length > 64) {
+    return {
+      ok: false,
+      code: 'MISSING_TRANSACTION_ID',
+      error: 'تعذر استخراج رقم العملية (transaction_id) من نص الإشعار.',
+    };
+  }
+  if (amount === null || !Number.isFinite(amount) || amount <= 0) {
+    return {
+      ok: false,
+      code: 'MISSING_AMOUNT',
+      error: 'تعذر استخراج قيمة المبلغ (amount) من نص الإشعار.',
+    };
+  }
+
+  return {
+    ok: true,
+    transactionId: txId.trim(),
+    normalizedTxId,
+    amount,
+    currency,
+    rawText: combinedRaw,
+    sourceApp,
+  };
+}
 
 function checkPaymentRateLimit(key: string): boolean {
   const now = Date.now();
@@ -4432,32 +4674,131 @@ app.post('/api/payments/invoice/:id/verify', async (req, res) => {
   }
 });
 
-// Authenticated Webhook for ShamCash automated transfer relay (HMAC-SHA256)
+// Authenticated MacroDroid Webhook for ShamCash automated notification relay (x-webhook-secret)
 app.post('/api/webhooks/shamcash', (req, res) => {
   const secret = process.env.SHAMCASH_WEBHOOK_SECRET?.trim();
   if (!secret) {
-    return res.status(503).json({ error: 'SHAMCASH_WEBHOOK_SECRET غير مضبوط على الخادم.' });
-  }
-  const sig = String(req.headers['x-shamcash-signature'] || '');
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(JSON.stringify(req.body || {}))
-    .digest('hex');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return res.status(401).json({ error: 'توقيع Webhook غير صالح.' });
+    return res.status(503).json({ ok: false, error: 'SHAMCASH_WEBHOOK_SECRET غير مضبوط على الخادم.' });
   }
 
-  const ref = String(req.body?.referenceId || '').trim();
-  const amount = Number(req.body?.amount);
-  const currency = String(req.body?.currency || 'USD').toUpperCase();
-  if (!ref || !Number.isFinite(amount) || amount <= 0) {
-    return res.status(400).json({ error: 'بيانات الحوالة غير مكتملة.' });
+  const headerSecret = String(req.headers['x-webhook-secret'] || '').trim();
+  const expectedBuf = Buffer.from(secret);
+  const providedBuf = Buffer.from(headerSecret);
+  if (
+    !headerSecret ||
+    providedBuf.length !== expectedBuf.length ||
+    !crypto.timingSafeEqual(providedBuf, expectedBuf)
+  ) {
+    return res.status(401).json({ ok: false, error: 'هيدر x-webhook-secret غير صالح.' });
   }
 
-  verifiedIncomingShamCashPool.set(ref, { amount, currency, receivedAt: Date.now() });
-  res.json({ ok: true, recorded: ref });
+  const parsed = parseShamCashNotificationPayload((req.body || {}) as Record<string, any>);
+  if (!parsed.ok) {
+    const status = parsed.code === 'IGNORED_NON_CREDIT_NOTIFICATION' ? 202 : 422;
+    return res.status(status).json({ ok: false, code: parsed.code, error: parsed.error });
+  }
+
+  // Strict UNIQUE duplicate guard on normalized transaction ID
+  if (verifiedIncomingShamCashPool.has(parsed.normalizedTxId)) {
+    return res.status(409).json({
+      ok: false,
+      outcome: 'DUPLICATE',
+      transaction_id: parsed.normalizedTxId,
+      error: 'رقم العملية مسجل مسبقاً ولا يمكن تكراره.',
+    });
+  }
+
+  let equivalentUsd = parsed.amount;
+  if (parsed.currency === 'SYP') {
+    equivalentUsd = Number((parsed.amount / (serverConfig.usdToSypRate || 15175)).toFixed(4));
+  } else if (parsed.currency === 'TRY') {
+    equivalentUsd = Number((parsed.amount / (serverConfig.usdToTryRate || 50.5)).toFixed(4));
+  } else {
+    equivalentUsd = Number(parsed.amount.toFixed(4));
+  }
+
+  const entry: IncomingShamCashTransfer = {
+    id: `sc-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+    transactionId: parsed.transactionId,
+    normalizedTxId: parsed.normalizedTxId,
+    amount: parsed.amount,
+    currency: parsed.currency,
+    equivalentUsd,
+    rawText: parsed.rawText,
+    sourceApp: parsed.sourceApp,
+    status: 'UNCLAIMED',
+    receivedAt: Date.now(),
+  };
+
+  // Match against any PENDING ShamCash top-up request immediately
+  const pendingReq = serverTopUpRequests.find(
+    (t) =>
+      t.status === 'PENDING' &&
+      normalizePaymentRef(t.referenceId) === parsed.normalizedTxId &&
+      (/sham|شام/i.test(t.gatewayId) || /sham|شام/i.test(t.gatewayNameAr))
+  );
+
+  if (pendingReq) {
+    const sameCurrencyMatch =
+      pendingReq.currencyOriginal === parsed.currency &&
+      Math.abs(pendingReq.amountOriginal - parsed.amount) <= Math.max(0.01, parsed.amount * 0.01);
+    const usdTolerance = Math.max(0.05, equivalentUsd * 0.02);
+    if (sameCurrencyMatch || Math.abs(pendingReq.equivalentUsd - equivalentUsd) <= usdTolerance) {
+      entry.status = 'CLAIMED';
+      entry.matchedTopUpId = pendingReq.id;
+      entry.claimedByUserId = pendingReq.userId;
+      entry.claimedAt = Date.now();
+
+      verifiedIncomingShamCashPool.set(parsed.normalizedTxId, entry);
+      persistShamCashTransfers();
+
+      const creditUsd = Number(equivalentUsd.toFixed(2));
+      pendingReq.status = 'APPROVED';
+      pendingReq.equivalentUsd = creditUsd;
+      pendingReq.equivalentSyp = Math.round(creditUsd * serverConfig.usdToSypRate);
+      pendingReq.processedAt = Date.now();
+      pendingReq.reviewedBy = 'ShamCash Webhook Auto-Match';
+
+      userWalletUsd = Number((userWalletUsd + creditUsd).toFixed(2));
+      const owner = Array.from(authUsers.values()).find((u) => u.id === pendingReq.userId);
+      if (owner) {
+        owner.balanceUsd = Number((owner.balanceUsd + creditUsd).toFixed(2));
+      }
+
+      usedReferenceRegistry.set(parsed.normalizedTxId, {
+        userId: pendingReq.userId,
+        userNameAr: pendingReq.userNameAr,
+        gatewayId: pendingReq.gatewayId,
+        status: 'APPROVED',
+        createdAt: pendingReq.createdAt,
+      });
+      usedPaymentReferences.add(pendingReq.referenceId);
+      persistUsedReferences();
+
+      return res.json({
+        ok: true,
+        outcome: 'MATCHED_AND_CREDITED',
+        transaction_id: parsed.normalizedTxId,
+        amount: parsed.amount,
+        currency: parsed.currency,
+        equivalent_usd: creditUsd,
+        topup_id: pendingReq.id,
+        user_id: pendingReq.userId,
+      });
+    }
+  }
+
+  verifiedIncomingShamCashPool.set(parsed.normalizedTxId, entry);
+  persistShamCashTransfers();
+
+  return res.json({
+    ok: true,
+    outcome: 'SAVED_UNCLAIMED',
+    transaction_id: parsed.normalizedTxId,
+    amount: parsed.amount,
+    currency: parsed.currency,
+    equivalent_usd: Number(equivalentUsd.toFixed(2)),
+  });
 });
 
 // Legacy direct verify endpoint (ShamCash & Syriatel strictly routed to Manual Review)

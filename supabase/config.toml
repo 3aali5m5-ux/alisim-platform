@@ -1,0 +1,5 @@
+project_id = "kfraikkxjixyybvlzuce"
+
+[functions.shamcash-webhook]
+# Authenticated via x-webhook-secret header (SHAMCASH_WEBHOOK_SECRET) for Android MacroDroid HTTP Requests
+verify_jwt = false
