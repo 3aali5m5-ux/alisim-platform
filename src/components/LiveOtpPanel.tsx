@@ -32,7 +32,7 @@ interface LiveOtpPanelProps {
   rates: ExchangeRatesConfig;
   onOrderAction: (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => Promise<void>;
   onSyncActiveFromGrizzly: () => Promise<void>;
   onOpenGuides?: () => void;
@@ -299,7 +299,7 @@ export const LiveOtpPanel: React.FC<LiveOtpPanelProps> = ({
 
   const handleAction = async (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => {
     setBusyOrderId(`${orderId}-${action}`);
     try {
@@ -733,18 +733,6 @@ export const LiveOtpPanel: React.FC<LiveOtpPanelProps> = ({
                           : c.waitingFirst}
                       </span>
                     </div>
-
-                    {!order.isLiveApi && (
-                      <button
-                        type="button"
-                        disabled={busyOrderId === `${order.id}-SIMULATE_SMS`}
-                        onClick={() => handleAction(order.id, 'SIMULATE_SMS')}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-extrabold flex items-center gap-1 cursor-pointer shrink-0 btn-solid-white"
-                      >
-                        <Play className="w-3 h-3" />
-                        <span>{c.simulateCode}</span>
-                      </button>
-                    )}
                   </div>
                 )}
 

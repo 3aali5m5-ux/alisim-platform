@@ -13,7 +13,7 @@ interface OtpActivationModalProps {
   rates: ExchangeRatesConfig;
   onOrderAction: (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => Promise<void>;
   onSyncActiveFromGrizzly: () => Promise<void>;
   onOpenGuides?: () => void;

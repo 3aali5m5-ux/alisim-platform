@@ -43,7 +43,7 @@ interface OrdersHistoryWorkspaceProps {
   onOpenOtpModal?: () => void;
   onSmsOrderAction?: (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => Promise<void>;
 }
 

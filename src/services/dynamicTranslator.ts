@@ -120,9 +120,9 @@ const INSTANT_AR_TRANSLATIONS: Record<string, { tr: string; en: string }> = {
     en: 'USDT (BEP20 — BNB Smart Chain)',
   },
   // Default Gateway Instructions & Field Labels
-  'أرسل USDT أو USD إلى Binance Pay ID (1073784382) بدون عمولة، ثم أدخل رقم الطلب (Order ID) للتحقق والشحن التلقائي الفوري.': {
-    tr: 'Binance Pay ID (1073784382) adresine komisyonsuz USDT veya USD gönderin, ardından anında otomatik yükleme için Sipariş Numarasını (Order ID) girin.',
-    en: 'Send USDT or USD to Binance Pay ID (1073784382) with zero fees, then enter your Order ID for instant automated verification.',
+  'أرسل USDT أو USD إلى معرف Binance Pay الموضح أعلاه بدون عمولة، ثم أدخل رقم الطلب (Order ID) للتحقق والشحن التلقائي الفوري.': {
+    tr: 'Yukarıda belirtilen Binance Pay ID adresine komisyonsuz USDT veya USD gönderin, ardından anında otomatik yükleme için Sipariş Numarasını (Order ID) girin.',
+    en: 'Send USDT or USD to the Binance Pay ID shown above with zero fees, then enter your Order ID for instant automated verification.',
   },
   'قم بالتحويل إلى عنوان محفظة شام كاش أو امسح رمز QR ثم أدخل رقم عملية التحويل للتحقق التلقائي الفوري (يمكنك إرفاق إشعار الدفع اختيارياً).': {
     tr: 'ShamCash cüzdan adresine transfer yapın veya QR kodu tarayın, ardından otomatik onay için işlem numarasını girin (dekont isteğe bağlıdır).',

@@ -43,15 +43,15 @@ const serverConfig: ServerConfig = {
   smsMarkupPercent: 25,
   esimMarkupPercent: 20,
   usdToSypRate: Number(process.env.USD_TO_SYP_RATE) || 14800,
-  usdToTryRate: Number(process.env.USD_TO_TRY_RATE) || 34.5,
+  usdToTryRate: Number(process.env.USD_TO_TRY_RATE) || 50.5,
   rubToUsdRate: Number(process.env.RUB_TO_USD_RATE) || 0.0108,
-  syriatelMerchantCode: process.env.SYRIATEL_MERCHANT_CODE || '0933884421 (رمز التاجر: 482910)',
-  syriatelMerchantName: 'شركة AliSMS للاتصالات الرقمية',
-  shamcashWalletAddress: process.env.SHAMCASH_WALLET_ADDRESS || '67de67e57bdc42690f935bab415e5c6e',
-  shamcashAccountHolder: 'AliSMS Telecom Syria',
-  binancePayId: process.env.BINANCE_PAY_ID || '1073784382',
-  binanceUsdtTrc20: process.env.USDT_TRC20_ADDRESS || 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
-  binanceUsdtBep20: process.env.USDT_BEP20_ADDRESS || '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
+  syriatelMerchantCode: process.env.SYRIATEL_MERCHANT_CODE || '',
+  syriatelMerchantName: '',
+  shamcashWalletAddress: process.env.SHAMCASH_WALLET_ADDRESS || '',
+  shamcashAccountHolder: '',
+  binancePayId: process.env.BINANCE_PAY_ID || '',
+  binanceUsdtTrc20: process.env.USDT_TRC20_ADDRESS || '',
+  binanceUsdtBep20: process.env.USDT_BEP20_ADDRESS || '',
   autoVerifyPayments: true,
   lowProviderBalanceThresholdUsd: Number(process.env.LOW_PROVIDER_BALANCE_USD) || 20,
 };
@@ -221,6 +221,439 @@ async function checkSupabaseHealth(): Promise<typeof supabaseHealthState> {
   return supabaseHealthState;
 }
 
+// ============================================================================
+// 1B. DIRECT SERVER-SIDE SUPABASE POSTGRESQL CLIENT (Production Data Layer)
+// ============================================================================
+async function supabaseSelect<T = any>(table: string, query = ''): Promise<T[]> {
+  const cfg = getSupabaseServerConfig();
+  if (!cfg) return [];
+  try {
+    const resp = await fetch(`${cfg.url}/rest/v1/${table}${query}`, {
+      headers: buildSupabaseHeaders(cfg.key),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return Array.isArray(data) ? (data as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function supabaseUpsert<T = any>(
+  table: string,
+  rows: Record<string, any> | Record<string, any>[],
+  onConflict?: string
+): Promise<{ ok: boolean; data: T[] }> {
+  const cfg = getSupabaseServerConfig();
+  if (!cfg) return { ok: false, data: [] };
+  try {
+    const qs = onConflict ? `?on_conflict=${encodeURIComponent(onConflict)}` : '';
+    const resp = await fetch(`${cfg.url}/rest/v1/${table}${qs}`, {
+      method: 'POST',
+      headers: buildSupabaseHeaders(cfg.key, {
+        Prefer: 'resolution=merge-duplicates,return=representation',
+      }),
+      body: JSON.stringify(rows),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return { ok: false, data: [] };
+    const data = await resp.json().catch(() => []);
+    return { ok: true, data: Array.isArray(data) ? (data as T[]) : [] };
+  } catch {
+    return { ok: false, data: [] };
+  }
+}
+
+async function supabasePatch(
+  table: string,
+  filterQuery: string,
+  patch: Record<string, any>
+): Promise<boolean> {
+  const cfg = getSupabaseServerConfig();
+  if (!cfg) return false;
+  try {
+    const resp = await fetch(`${cfg.url}/rest/v1/${table}?${filterQuery}`, {
+      method: 'PATCH',
+      headers: buildSupabaseHeaders(cfg.key, { Prefer: 'return=minimal' }),
+      body: JSON.stringify(patch),
+      signal: AbortSignal.timeout(8000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function supabaseSyncWallet(
+  userId: string,
+  userNameAr: string,
+  emailOrPhone: string,
+  balanceUsd: number,
+  role = 'USER',
+  ordersCount?: number,
+  totalSpentUsd?: number
+) {
+  const payload: Record<string, any> = {
+    user_id: userId,
+    user_name_ar: userNameAr || 'عميل المنصة',
+    email_or_phone: emailOrPhone || null,
+    balance_usd: Number(Math.max(0, balanceUsd).toFixed(4)),
+    role,
+    updated_at: new Date().toISOString(),
+  };
+  if (typeof ordersCount === 'number') payload.orders_count = ordersCount;
+  if (typeof totalSpentUsd === 'number') payload.total_spent_usd = Number(totalSpentUsd.toFixed(4));
+  await supabaseUpsert('user_wallets', [payload], 'user_id');
+}
+
+async function supabaseSyncSmsOrder(order: any) {
+  await supabaseUpsert(
+    'sms_activations_history',
+    [
+      {
+        id: String(order.id),
+        activation_id: String(order.activationId || order.id),
+        service_code: String(order.serviceCode || 'ot'),
+        service_name_ar: String(order.serviceNameAr || ''),
+        country_id: String(order.countryId || '0'),
+        country_name_ar: String(order.countryNameAr || ''),
+        iso2: String(order.iso2 || 'un'),
+        phone_number: String(order.phoneNumber || ''),
+        base_cost_usd: Number(order.activationCostOrigin || 0),
+        price_usd: Number(order.priceUsd || 0),
+        price_syp: Number(order.priceSyp || 0),
+        status: String(order.status || 'WAITING_SMS'),
+        sms_code: order.smsCode || null,
+        full_sms_text: order.fullSmsText || null,
+        created_at: new Date(order.createdAt || Date.now()).toISOString(),
+        expires_at: new Date(order.expiresAt || Date.now() + 20 * 60_000).toISOString(),
+      },
+    ],
+    'id'
+  );
+}
+
+async function supabaseSyncESimOrder(order: any) {
+  await supabaseUpsert(
+    'esim_orders',
+    [
+      {
+        id: String(order.id),
+        iccid: String(order.iccid || ''),
+        plan_id: String(order.planId || ''),
+        country_name_ar: String(order.countryNameAr || ''),
+        iso2: String(order.iso2 || 'un'),
+        data_label_ar: String(order.dataLabelAr || ''),
+        validity_days: Number(order.validityDays || 7),
+        network_type: String(order.networkType || '5G'),
+        smdp_address: String(order.smdpAddress || ''),
+        activation_code: String(order.activationCode || ''),
+        lpa_string: String(order.lpaString || ''),
+        status: String(order.status || 'READY_TO_INSTALL'),
+        base_cost_usd: Number(order.baseCostUsd || 0),
+        price_usd: Number(order.priceUsd || 0),
+        price_syp: Number(order.priceSyp || 0),
+        purchased_at: new Date(order.purchasedAt || Date.now()).toISOString(),
+      },
+    ],
+    'id'
+  );
+}
+
+async function supabaseInsertActivityLog(
+  eventType: string,
+  titleAr: string,
+  detailsAr: string,
+  amountUsd = 0,
+  netProfitUsd = 0
+) {
+  await supabaseUpsert(
+    'activity_logs',
+    [
+      {
+        id: `act-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+        event_type: eventType,
+        title_ar: titleAr,
+        details_ar: detailsAr,
+        amount_usd: Number(amountUsd || 0),
+        net_profit_usd: Number(netProfitUsd || 0),
+        created_at: new Date().toISOString(),
+      },
+    ],
+    'id'
+  );
+}
+
+async function loadLiveSnapshotFromSupabase(authUser: AuthRecord | null) {
+  const isStaffUser = Boolean(authUser && (authUser.role === 'ADMIN' || authUser.role === 'MODERATOR'));
+  const [
+    settingsRows,
+    gatewayRows,
+    pricingRows,
+    customEsimRows,
+    walletRows,
+    smsRows,
+    esimRows,
+    topupRows,
+    activityRows,
+    lpaRows,
+    favRows,
+  ] = await Promise.all([
+    supabaseSelect<any>('app_settings', '?id=eq.global_config&limit=1'),
+    supabaseSelect<any>('payment_gateways', '?select=*&order=id.asc'),
+    supabaseSelect<any>('pricing_overrides', '?select=*&order=updated_at.desc'),
+    supabaseSelect<any>('esim_custom_catalog', '?select=*&order=updated_at.desc'),
+    supabaseSelect<any>('user_wallets', '?select=*&order=updated_at.desc'),
+    supabaseSelect<any>('sms_activations_history', '?select=*&order=created_at.desc&limit=100'),
+    supabaseSelect<any>('esim_orders', '?select=*&order=purchased_at.desc&limit=100'),
+    supabaseSelect<any>('topup_requests', '?select=*&order=created_at.desc&limit=200'),
+    supabaseSelect<any>('activity_logs', '?select=*&order=created_at.desc&limit=150'),
+    isStaffUser ? supabaseSelect<any>('esim_lpa_inventory', '?select=*&order=added_at.desc&limit=200') : Promise.resolve([]),
+    supabaseSelect<any>('user_favorites', '?select=*&limit=1'),
+  ]);
+
+  const appRow = settingsRows[0] || null;
+  if (appRow) {
+    if (Number.isFinite(Number(appRow.sms_markup_percent))) {
+      serverConfig.smsMarkupPercent = Number(appRow.sms_markup_percent);
+    }
+    if (Number.isFinite(Number(appRow.esim_markup_percent))) {
+      serverConfig.esimMarkupPercent = Number(appRow.esim_markup_percent);
+    }
+  }
+
+  // Hydrate payment gateways from Supabase (zero hardcoded fallback!)
+  const paymentGateways = gatewayRows.map((g: any) => {
+    const code = String(g.code || '').toLowerCase();
+    const isAuto = code === 'binance' || code === 'usdt_trc20' || code === 'usdt_bep20';
+    if (code === 'binance' && g.account_address && !process.env.BINANCE_PAY_ID) {
+      serverConfig.binancePayId = String(g.account_address);
+    }
+    if (code === 'usdt_trc20' && g.account_address && !process.env.USDT_TRC20_ADDRESS) {
+      serverConfig.binanceUsdtTrc20 = String(g.account_address);
+    }
+    if (code === 'usdt_bep20' && g.account_address && !process.env.USDT_BEP20_ADDRESS) {
+      serverConfig.binanceUsdtBep20 = String(g.account_address);
+    }
+    if (code === 'shamcash' && g.account_address) {
+      serverConfig.shamcashWalletAddress = String(g.account_address);
+      serverConfig.shamcashAccountHolder = String(g.account_holder || '');
+    }
+    if (code === 'syriatel' && g.account_address) {
+      serverConfig.syriatelMerchantCode = String(g.account_address);
+      serverConfig.syriatelMerchantName = String(g.account_holder || '');
+    }
+    return {
+      id: String(g.id),
+      code: String(g.code),
+      nameAr: String(g.name_ar || g.code),
+      accountAddress: String(g.account_address || ''),
+      accountHolder: String(g.account_holder || ''),
+      qrCodeText: String(g.qr_code_text || g.account_address || ''),
+      minTopUpAmount: Number(g.min_topup_amount || 1),
+      currency: (g.currency || 'USD') as 'USD' | 'USDT' | 'SYP' | 'TRY',
+      isEnabled: g.is_enabled !== false,
+      isAutomated: isAuto,
+      allowReceiptUpload: !isAuto,
+      requireReceiptUpload: !isAuto,
+      instructionsAr: String(g.instructions_ar || ''),
+    };
+  });
+
+  const pricingOverrides = pricingRows.map((r: any) => ({
+    id: String(r.id),
+    targetType: r.target_type === 'country' ? 'country' : 'service',
+    targetCode: String(r.target_code),
+    targetNameAr: String(r.target_name_ar || r.target_code),
+    customMarkupPercent: r.custom_markup_percent != null ? Number(r.custom_markup_percent) : undefined,
+    fixedPriceUsd: r.fixed_price_usd != null ? Number(r.fixed_price_usd) : undefined,
+    isHidden: Boolean(r.is_hidden),
+  }));
+
+  const customESimPlans = customEsimRows
+    .filter((r: any) => r.is_available !== false)
+    .map((r: any) => {
+      const baseCostUsd = Number(r.base_cost_usd || 0);
+      const finalPriceUsd = Number((baseCostUsd * (1 + serverConfig.esimMarkupPercent / 100)).toFixed(2));
+      const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, any>;
+      return {
+        ...payload,
+        id: String(r.id),
+        countryNameAr: String(r.country_name_ar || ''),
+        countryNameEn: String(payload.countryNameEn || r.country_name_ar || ''),
+        iso2: String(r.iso2 || 'un').toLowerCase(),
+        region: (r.region || 'local') as 'local' | 'regional' | 'global',
+        dataLabelAr: String(r.data_label_ar || ''),
+        dataAmountGb: payload.dataAmountGb ?? 1,
+        validityDays: Number(r.validity_days || 30),
+        networkType: String(r.network_type || '5G'),
+        baseCostUsd,
+        finalPriceUsd,
+        finalPriceSyp: Math.ceil((finalPriceUsd * serverConfig.usdToSypRate) / 500) * 500,
+        isLiveGrizzlyCatalog: false,
+      };
+    });
+
+  // Resolve real authenticated wallet balance directly from Supabase user_wallets
+  let realWalletUsd = 0;
+  if (authUser) {
+    const matchedWallet = walletRows.find(
+      (w: any) =>
+        String(w.user_id) === authUser.id ||
+        (w.email_or_phone &&
+          String(w.email_or_phone).toLowerCase() === authUser.email.toLowerCase())
+    );
+    if (matchedWallet) {
+      realWalletUsd = Number(Number(matchedWallet.balance_usd || 0).toFixed(2));
+      authUser.balanceUsd = realWalletUsd;
+    } else {
+      realWalletUsd = 0;
+      authUser.balanceUsd = 0;
+    }
+  }
+
+  const managedUsers = isStaffUser
+    ? walletRows.map((w: any) => ({
+        id: String(w.user_id),
+        nameAr: String(w.user_name_ar || 'عميل المنصة'),
+        emailOrPhone: String(w.email_or_phone || w.user_id),
+        balanceUsd: Number(Number(w.balance_usd || 0).toFixed(2)),
+        totalSpentUsd: Number(Number(w.total_spent_usd || 0).toFixed(2)),
+        ordersCount: Number(w.orders_count || 0),
+        role: (['ADMIN', 'MODERATOR', 'RESELLER', 'USER'].includes(String(w.role).toUpperCase())
+          ? String(w.role).toUpperCase()
+          : 'USER') as AuthRecord['role'],
+        vipDiscountPercent: Number(w.vip_discount_percent || 0),
+        lastActiveAt: w.updated_at ? new Date(w.updated_at).getTime() : Date.now(),
+      }))
+    : [];
+
+  const smsOrdersFromDb = smsRows.map((s: any) => ({
+    id: String(s.id),
+    activationId: String(s.activation_id),
+    serviceCode: String(s.service_code),
+    serviceNameAr: String(s.service_name_ar),
+    countryId: String(s.country_id),
+    countryNameAr: String(s.country_name_ar),
+    iso2: String(s.iso2 || 'un'),
+    phoneNumber: String(s.phone_number),
+    priceUsd: Number(s.price_usd || 0),
+    priceSyp: Number(s.price_syp || 0),
+    status: String(s.status || 'WAITING_SMS'),
+    smsCode: s.sms_code || null,
+    fullSmsText: s.full_sms_text || null,
+    createdAt: s.created_at ? new Date(s.created_at).getTime() : Date.now(),
+    expiresAt: s.expires_at ? new Date(s.expires_at).getTime() : Date.now(),
+    isLiveApi: true,
+  }));
+
+  const esimOrdersFromDb = esimRows.map((e: any) => ({
+    id: String(e.id),
+    iccid: String(e.iccid),
+    planId: String(e.plan_id),
+    countryNameAr: String(e.country_name_ar),
+    iso2: String(e.iso2 || 'un'),
+    dataLabelAr: String(e.data_label_ar),
+    validityDays: Number(e.validity_days || 7),
+    networkType: String(e.network_type || '5G'),
+    smdpAddress: String(e.smdp_address),
+    activationCode: String(e.activation_code),
+    lpaString: String(e.lpa_string),
+    status: String(e.status || 'READY_TO_INSTALL'),
+    priceUsd: Number(e.price_usd || 0),
+    priceSyp: Number(e.price_syp || 0),
+    purchasedAt: e.purchased_at ? new Date(e.purchased_at).getTime() : Date.now(),
+    expiresAt:
+      (e.purchased_at ? new Date(e.purchased_at).getTime() : Date.now()) +
+      Number(e.validity_days || 7) * 86400 * 1000,
+  }));
+
+  const mappedTopUps = topupRows
+    .filter((t: any) => isStaffUser || (authUser && String(t.user_id) === authUser.id))
+    .map((t: any) => ({
+      id: String(t.id),
+      userId: String(t.user_id),
+      userNameAr: String(t.user_name_ar || 'عميل المنصة'),
+      gatewayId: String(t.gateway_id),
+      gatewayNameAr: String(t.gateway_name_ar || t.gateway_id),
+      referenceId: String(t.reference_id),
+      amountOriginal: Number(t.amount_original || 0),
+      currencyOriginal: (t.currency_original || 'USD') as 'USD' | 'USDT' | 'SYP' | 'TRY',
+      equivalentUsd: Number(t.equivalent_usd || 0),
+      equivalentSyp: Number(t.equivalent_syp || 0),
+      status: (t.status || 'PENDING') as 'PENDING' | 'APPROVED' | 'REJECTED',
+      rejectionReason: t.rejection_reason || undefined,
+      createdAt: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
+      processedAt: t.processed_at ? new Date(t.processed_at).getTime() : undefined,
+    }));
+
+  const paymentHistoryFromDb = mappedTopUps
+    .filter((t) => t.status === 'APPROVED')
+    .map((t) => ({
+      id: t.id,
+      gateway: t.gatewayId,
+      gatewayLabelAr: t.gatewayNameAr,
+      referenceId: t.referenceId,
+      amountOriginal: t.amountOriginal,
+      currencyOriginal: t.currencyOriginal,
+      creditedUsd: t.equivalentUsd,
+      creditedSyp: t.equivalentSyp,
+      status: 'VERIFIED' as const,
+      createdAt: t.processedAt || t.createdAt,
+    }));
+
+  const activityLogs = isStaffUser
+    ? activityRows.map((a: any) => ({
+        id: String(a.id),
+        type: String(a.event_type || 'ADMIN_UPDATE'),
+        titleAr: String(a.title_ar || ''),
+        detailsAr: String(a.details_ar || ''),
+        amountUsd: Number(a.amount_usd || 0),
+        netProfitUsd: Number(a.net_profit_usd || 0),
+        createdAt: a.created_at ? new Date(a.created_at).getTime() : Date.now(),
+      }))
+    : [];
+
+  const lpaInventory = isStaffUser
+    ? lpaRows.map((l: any) => ({
+        id: String(l.id),
+        planId: String(l.plan_id),
+        countryNameAr: String(l.country_name_ar),
+        iso2: String(l.iso2 || 'un'),
+        dataLabelAr: String(l.data_label_ar),
+        smdpAddress: String(l.smdp_address),
+        activationCode: String(l.activation_code),
+        lpaString: String(l.lpa_string),
+        iccid: String(l.iccid),
+        isUsed: Boolean(l.is_used),
+        assignedOrderId: l.assigned_order_id || undefined,
+        addedAt: l.added_at ? new Date(l.added_at).getTime() : Date.now(),
+      }))
+    : [];
+
+  const fav = favRows[0] || null;
+  const pinnedCountries = Array.isArray(fav?.pinned_countries) ? fav.pinned_countries : [];
+  const pinnedServices = Array.isArray(fav?.pinned_services) ? fav.pinned_services : [];
+
+  return {
+    cmsConfig: appRow?.cms_payload && typeof appRow.cms_payload === 'object' ? appRow.cms_payload : null,
+    walletUsd: realWalletUsd,
+    paymentGateways,
+    pricingOverrides,
+    customESimPlans,
+    managedUsers,
+    smsOrdersFromDb,
+    esimOrdersFromDb,
+    topUpRequests: mappedTopUps,
+    paymentHistoryFromDb,
+    activityLogs,
+    lpaInventory,
+    pinnedCountries,
+    pinnedServices,
+  };
+}
+
 function persistUsedReferences() {
   writeJsonFileSafe(USED_REFS_PATH, Object.fromEntries(usedReferenceRegistry.entries()));
 }
@@ -388,10 +821,7 @@ const COUNTRY_PRICE_MULTIPLIER: Record<string, number> = {
   '22': 0.7,
 };
 
-const FALLBACK_ESIM_PLANS = [
-  { id: 'esim-sy-lb-3gb', nameEn: 'Middle East & Levant 3GB 15Days', countryId: '110', countryNameAr: 'سوريا ولبنان والشرق الأوسط', countryNameEn: 'Syria & Levant', iso2: 'sy', region: 'regional', countriesCount: 8, coveredCountries: [{ iso2: 'sy', nameAr: 'سوريا', nameEn: 'Syria' }, { iso2: 'lb', nameAr: 'لبنان', nameEn: 'Lebanon' }, { iso2: 'jo', nameAr: 'الأردن', nameEn: 'Jordan' }, { iso2: 'tr', nameAr: 'تركيا', nameEn: 'Turkey' }], dataAmountGb: 3, dataLabelAr: '3 جيجابايت', validityDays: 15, networkType: '4G/LTE', tetheringAllowed: true, providerName: 'AliSMS eSIM Official', baseCostUsd: 6.5, stockCount: 145 },
-  { id: 'esim-tr-10gb', nameEn: 'Turkey 10GB 30Days', countryId: '62', countryNameAr: 'تركيا', countryNameEn: 'Turkey', iso2: 'tr', region: 'local', countriesCount: 1, coveredCountries: [{ iso2: 'tr', nameAr: 'تركيا', nameEn: 'Turkey' }], dataAmountGb: 10, dataLabelAr: '10 جيجابايت', validityDays: 30, networkType: '5G', tetheringAllowed: true, providerName: 'AliSMS eSIM Official', baseCostUsd: 7.9, stockCount: 510 },
-];
+// Production Mode: zero hardcoded fallback eSIM plans (100% live upstream + Supabase catalog)
 
 // ============================================================================
 // 3. OFFICIAL GRIZZLYSMS HTTP CLIENT & HELPERS
@@ -519,20 +949,34 @@ app.get('/api/grizzly/sms/countries', async (_req, res) => {
   res.json({ countries: list, total: list.length });
 });
 
-app.get('/api/bootstrap', async (_req, res) => {
-  const [syncStatus, dynamicCountries] = await Promise.all([
+app.get('/api/bootstrap', async (req, res) => {
+  const authUser = getAuthUserFromRequest(req);
+  const [syncStatus, dynamicCountries, dbSnap] = await Promise.all([
     syncProviderBalance(),
     fetchDynamicCountries(),
+    loadLiveSnapshotFromSupabase(authUser),
   ]);
   const balanceUsd =
     syncStatus.balanceRub !== null
       ? Number((syncStatus.balanceRub * serverConfig.rubToUsdRate).toFixed(2))
       : null;
 
+  const liveWalletUsd = authUser ? dbSnap.walletUsd : 0;
+
   res.json({
-    walletUsd: Number(userWalletUsd.toFixed(2)),
-    walletSyp: Math.round(userWalletUsd * serverConfig.usdToSypRate),
+    walletUsd: liveWalletUsd,
+    walletSyp: Math.round(liveWalletUsd * serverConfig.usdToSypRate),
     countries: dynamicCountries,
+    cmsConfig: dbSnap.cmsConfig,
+    paymentGateways: dbSnap.paymentGateways,
+    pricingOverrides: dbSnap.pricingOverrides,
+    customESimPlans: dbSnap.customESimPlans,
+    topUpRequests: dbSnap.topUpRequests,
+    managedUsers: dbSnap.managedUsers,
+    activityLogs: dbSnap.activityLogs,
+    lpaInventory: dbSnap.lpaInventory,
+    pinnedCountries: dbSnap.pinnedCountries,
+    pinnedServices: dbSnap.pinnedServices,
     settings: {
       hasApiKey: Boolean(serverConfig.grizzlyApiKey.trim()),
       maskedApiKey: maskKey(serverConfig.grizzlyApiKey.trim()),
@@ -566,9 +1010,9 @@ app.get('/api/bootstrap', async (_req, res) => {
       isProviderBalanceLow:
         balanceUsd !== null && balanceUsd < serverConfig.lowProviderBalanceThresholdUsd,
     },
-    activeSmsOrders,
-    activeESimOrders,
-    paymentHistory,
+    activeSmsOrders: dbSnap.smsOrdersFromDb,
+    activeESimOrders: dbSnap.esimOrdersFromDb,
+    paymentHistory: dbSnap.paymentHistoryFromDb,
   });
 });
 
@@ -619,7 +1063,7 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
   }
 
   let livePricesObj: Record<string, { cost: number; count: number; rawTiers?: { providerId: string; count: number; priceRub: number }[] }> | null = null;
-  let sourceMode: 'LIVE_GRIZZLY_API' | 'SIMULATED_CATALOG' = 'SIMULATED_CATALOG';
+  const sourceMode: 'LIVE_GRIZZLY_API' = 'LIVE_GRIZZLY_API';
 
   if (serverConfig.grizzlyApiKey.trim()) {
     try {
@@ -642,19 +1086,18 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
                   if (pr > 0) {
                     rawTiers.push({
                       providerId: String(pd.provider_id || pId),
-                      count: Number(pd.count || 20),
+                      count: Number(pd.count || 0),
                       priceRub: pr,
                     });
                   }
                 }
               }
             }
-            if (cost > 0) {
+            if (cost > 0 && count > 0) {
               livePricesObj[serviceCode] = { cost, count, rawTiers };
             }
           }
         }
-        sourceMode = 'LIVE_GRIZZLY_API';
       }
     } catch {
       try {
@@ -666,31 +1109,38 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
           for (const [serviceCode, val] of Object.entries(countryMap)) {
             if (val && typeof val === 'object') {
               const vObj = val as any;
-              if (typeof vObj.cost !== 'undefined') {
-                livePricesObj[serviceCode] = {
-                  cost: Number(vObj.cost),
-                  count: Number(vObj.count ?? 0),
-                };
+              const cost = Number(vObj.cost ?? 0);
+              const count = Number(vObj.count ?? 0);
+              if (cost > 0 && count > 0) {
+                livePricesObj[serviceCode] = { cost, count };
               }
             }
           }
-          sourceMode = 'LIVE_GRIZZLY_API';
         }
       } catch {
-        // Fallback
+        // Production Mode: never synthesize fake prices on upstream error
       }
     }
   }
 
-  const multiplier = COUNTRY_PRICE_MULTIPLIER[countryId] || 1.0;
+  // Production Mode: return empty list if live provider is unreachable or has zero stock
+  if (!livePricesObj || Object.keys(livePricesObj).length === 0) {
+    return res.json({
+      countryId,
+      sourceMode,
+      services: [],
+      error: serverConfig.grizzlyApiKey.trim()
+        ? 'لا تتوفر أرقام حية لهذه الدولة في الوقت الحالي.'
+        : 'مفتاح مزود الأرقام (GRIZZLY_API_KEY) غير مضبوط على الخادم.',
+    });
+  }
+
   const markupFactor = 1 + serverConfig.smsMarkupPercent / 100;
 
-  // Build 100% dynamic service list: known services first, plus ALL additional upstream services!
-  const knownCodes = Object.keys(GRIZZLY_SERVICES_META);
-  const extraLiveCodes = livePricesObj
-    ? Object.keys(livePricesObj).filter((c) => !GRIZZLY_SERVICES_META[c] && (livePricesObj![c]?.count ?? 0) > 0)
-    : [];
-  const allServiceCodes = [...knownCodes, ...extraLiveCodes];
+  // Include ONLY services actually present in the live upstream response (known apps first, then all others)
+  const knownLiveCodes = Object.keys(GRIZZLY_SERVICES_META).filter((c) => Boolean(livePricesObj![c]));
+  const extraLiveCodes = Object.keys(livePricesObj).filter((c) => !GRIZZLY_SERVICES_META[c]);
+  const allServiceCodes = [...knownLiveCodes, ...extraLiveCodes];
 
   const services = allServiceCodes.map((code) => {
     const meta = GRIZZLY_SERVICES_META[code] || {
@@ -698,16 +1148,12 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
       nameEn: `Service ${code.toUpperCase()}`,
       nameTr: `Servis ${code.toUpperCase()}`,
       category: 'other',
-      defaultRub: 18,
-      defaultCount: 120,
+      defaultRub: 0,
+      defaultCount: 0,
     };
-    const liveItem = livePricesObj?.[code];
-    const baseCostRub = liveItem
-      ? liveItem.cost
-      : Number((meta.defaultRub * multiplier).toFixed(2));
-    const count = liveItem
-      ? liveItem.count
-      : Math.max(12, Math.round(meta.defaultCount * (2 - multiplier * 0.4)));
+    const liveItem = livePricesObj![code];
+    const baseCostRub = liveItem.cost;
+    const count = liveItem.count;
 
     const calcTier = (rub: number, providerId: string, labelAr: string, deliveryRate: number, tierCount: number) => {
       const bUsd = Number((rub * serverConfig.rubToUsdRate).toFixed(3));
@@ -726,8 +1172,7 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
     };
 
     let priceTiers = [];
-    if (liveItem?.rawTiers && liveItem.rawTiers.length > 0) {
-      // Dynamic unlimited tiers — return ALL providers & price points from upstream without capping at 4!
+    if (liveItem.rawTiers && liveItem.rawTiers.length > 0) {
       const sorted = [...liveItem.rawTiers].sort((a, b) => a.priceRub - b.priceRub);
       priceTiers = sorted.map((t, idx) => {
         const tierLabel =
@@ -737,37 +1182,11 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
             ? `المزود #${t.providerId} (أعلى جودة وأسرع وصول)`
             : `المزود #${t.providerId} (فئة ${idx + 1})`;
         const rate = Math.min(99, 84 + Math.round((idx / Math.max(1, sorted.length - 1)) * 15));
-        return calcTier(t.priceRub, t.providerId, tierLabel, rate, t.count);
+        return calcTier(t.priceRub, t.providerId, tierLabel, rate, t.count || count);
       });
     } else {
-      // Dynamic fallback tier count (5 to 7 tiers depending on app popularity so UI showcases >4 tiers)
-      const popularSix = ['wa', 'tg', 'go', 'fb', 'ig', 'lf', 'dr', 'tw'].includes(code);
-      const tierTemplates = popularSix
-        ? [
-            { mult: 1.0, id: '1', label: 'المزود #1 (الاقتصادي)', rate: 84, share: 0.28 },
-            { mult: 1.12, id: '2', label: 'المزود #2 (قياسي مستقر)', rate: 89, share: 0.22 },
-            { mult: 1.24, id: '3', label: 'المزود #3 (استلام سريع)', rate: 93, share: 0.18 },
-            { mult: 1.38, id: '4', label: 'المزود #4 (أولوية عالية)', rate: 95, share: 0.14 },
-            { mult: 1.55, id: '5', label: 'المزود #5 (شريحة مباشرة)', rate: 97, share: 0.1 },
-            { mult: 1.78, id: '6', label: 'المزود #6 (أعلى جودة VIP)', rate: 99, share: 0.08 },
-          ]
-        : [
-            { mult: 1.0, id: '1', label: 'المزود #1 (الاقتصادي)', rate: 85, share: 0.32 },
-            { mult: 1.15, id: '2', label: 'المزود #2 (قياسي)', rate: 90, share: 0.24 },
-            { mult: 1.3, id: '3', label: 'المزود #3 (سريع)', rate: 94, share: 0.2 },
-            { mult: 1.48, id: '4', label: 'المزود #4 (ممتاز)', rate: 97, share: 0.14 },
-            { mult: 1.68, id: '5', label: 'المزود #5 (فوري 99%)', rate: 99, share: 0.1 },
-          ];
-
-      priceTiers = tierTemplates.map((tpl) =>
-        calcTier(
-          baseCostRub * tpl.mult,
-          tpl.id,
-          tpl.label,
-          tpl.rate,
-          Math.max(5, Math.round(count * tpl.share))
-        )
-      );
+      // Single authentic upstream price tier — never fabricate fake tiers
+      priceTiers = [calcTier(baseCostRub, 'direct', 'التسعيرة المباشرة الحية', 92, count)];
     }
 
     const lowestTier = priceTiers[0];
@@ -804,11 +1223,15 @@ app.get('/api/grizzly/sms/catalog', async (req, res) => {
 // Buy SMS Number supporting tier price selection and maxPrice upgrading
 app.post('/api/grizzly/sms/buy', async (req, res) => {
   const buyer = getAuthUserFromRequest(req);
-  if (buyer) {
-    const restriction = checkUserRestriction(buyer);
-    if (restriction.blocked) {
-      return res.status(403).json({ error: restriction.error, code: 'ACCOUNT_RESTRICTED' });
-    }
+  if (!buyer) {
+    return res.status(401).json({
+      error: 'يرجى تسجيل الدخول أولاً لشراء رقم تفعيل حي.',
+      code: 'AUTH_REQUIRED',
+    });
+  }
+  const restriction = checkUserRestriction(buyer);
+  if (restriction.blocked) {
+    return res.status(403).json({ error: restriction.error, code: 'ACCOUNT_RESTRICTED' });
   }
 
   const {
@@ -836,16 +1259,26 @@ app.post('/api/grizzly/sms/buy', async (req, res) => {
   let finalPriceUsd = selectedTierPriceUsd
     ? Number(Number(selectedTierPriceUsd).toFixed(2))
     : Number(Math.max(0.12, baseCostUsd * markupFactor).toFixed(2));
-  if (buyer && buyer.role === 'RESELLER' && buyer.resellerDiscountPercent && !selectedTierPriceUsd) {
+  if (buyer.role === 'RESELLER' && buyer.resellerDiscountPercent && !selectedTierPriceUsd) {
     finalPriceUsd = Number(
       Math.max(baseCostUsd * 1.03, finalPriceUsd * (1 - buyer.resellerDiscountPercent / 100)).toFixed(2)
     );
   }
   const finalPriceSyp = Math.ceil((finalPriceUsd * serverConfig.usdToSypRate) / 100) * 100;
 
-  if (userWalletUsd < finalPriceUsd) {
+  let liveBalanceUsd = Number(buyer.balanceUsd || 0);
+  const walletRows = await supabaseSelect<any>(
+    'user_wallets',
+    `?user_id=eq.${encodeURIComponent(buyer.id)}&select=balance_usd&limit=1`
+  );
+  if (walletRows && walletRows.length > 0) {
+    liveBalanceUsd = Number(walletRows[0].balance_usd || 0);
+    buyer.balanceUsd = liveBalanceUsd;
+  }
+
+  if (liveBalanceUsd < finalPriceUsd) {
     return res.status(400).json({
-      error: 'رصيد المحفظة غير كافٍ لإتمام الشراء. يرجى شحن الرصيد أولاً.',
+      error: `رصيد المحفظة غير كافٍ لإتمام الشراء (رصيدك الحالي $${liveBalanceUsd.toFixed(2)}). يرجى شحن الرصيد أولاً.`,
       code: 'NO_WALLET_BALANCE',
     });
   }
@@ -934,19 +1367,23 @@ app.post('/api/grizzly/sms/buy', async (req, res) => {
     }
   }
 
-  if (!activationId) {
-    activationId = String(Math.floor(38000000 + Math.random() * 9000000));
-    const dial = country.id === 'any' ? '+44' : country.dialCode;
-    const randomSubscriber = Math.floor(740000000 + Math.random() * 199999999);
-    phoneNumber = `${dial}${randomSubscriber}`;
-    isLiveApi = false;
+  if (!activationId || !phoneNumber) {
+    return res.status(400).json({
+      code: 'UPSTREAM_ACTIVATION_FAILED',
+      error: serverConfig.grizzlyApiKey.trim()
+        ? 'لم يتمكن مزود الأرقام من إصدار رقم حي حالياً (تأكد من رصيد المزود أو توفر الأرقام).'
+        : 'مفتاح مزود الأرقام (GRIZZLY_API_KEY) غير مضبوط على الخادم.',
+    });
   }
 
-  userWalletUsd = Number((userWalletUsd - finalPriceUsd).toFixed(2));
+  const newBuyerBalance = Number(Math.max(0, liveBalanceUsd - finalPriceUsd).toFixed(2));
+  buyer.balanceUsd = newBuyerBalance;
+  userWalletUsd = newBuyerBalance;
   const nowMs = Date.now();
 
   const newOrder = {
-    id: `SMS-${nowMs.toString().slice(-5)}`,
+    id: `SMS-${nowMs.toString().slice(-5)}-${crypto.randomBytes(2).toString('hex')}`,
+    userId: buyer.id,
     activationId,
     serviceCode: String(serviceCode),
     serviceNameAr: serviceMeta.nameAr,
@@ -968,15 +1405,28 @@ app.post('/api/grizzly/sms/buy', async (req, res) => {
     expiresAt: nowMs + 20 * 60 * 1000,
     cancelLockSec,
     cancelAvailableAt: nowMs + cancelLockSec * 1000,
-    isLiveApi,
+    isLiveApi: true,
   };
 
   activeSmsOrders.unshift(newOrder);
+  persistOrdersAndPayments();
+  await supabaseSyncSmsOrder(newOrder);
+  if (buyer) {
+    await supabaseSyncWallet(buyer.id, buyer.nameAr, buyer.email, buyer.balanceUsd, buyer.role);
+  }
+  await supabaseInsertActivityLog(
+    'SMS_BUY',
+    `شراء رقم تفعيل حي (${serviceMeta.nameAr})`,
+    `رقم ${phoneNumber} (${country.nameAr}) بقيمة $${finalPriceUsd.toFixed(2)}`,
+    finalPriceUsd,
+    0
+  );
 
+  const responseWallet = buyer ? buyer.balanceUsd : userWalletUsd;
   res.json({
     order: newOrder,
-    walletUsd: userWalletUsd,
-    walletSyp: Math.round(userWalletUsd * serverConfig.usdToSypRate),
+    walletUsd: responseWallet,
+    walletSyp: Math.round(responseWallet * serverConfig.usdToSypRate),
   });
 });
 
@@ -1080,24 +1530,10 @@ app.get('/api/grizzly/sms/poll', async (_req, res) => {
             recordOtpOutcome(order.countryId, order.serviceCode, 'failed');
           }
         }
-      } catch {}
-    } else if (!order.isLiveApi && ['WAITING_SMS', 'READY_SENT', 'WAIT_RETRY', 'WAIT_RESEND'].includes(order.status)) {
-      const refTime = order.retriedAt || order.createdAt;
-      const elapsedSeconds = (Date.now() - refTime) / 1000;
-      const waitThreshold = order.retriedAt ? 5 : 9;
-      if (elapsedSeconds >= waitThreshold && !order.smsCode) {
-        const wasFirstReceive = !order.smsHistory || order.smsHistory.length === 0;
-        const generatedCode = String(Math.floor(100000 + Math.random() * 900000));
-        const smsText = `<#> كود تفعيل ${order.serviceNameAr} الخاص بك هو: ${generatedCode} (لا تشاركه مع أحد)`;
-        order.status = 'SMS_RECEIVED';
-        order.smsCode = generatedCode;
-        order.fullSmsText = smsText;
-        order.smsDateTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
-        appendUniqueSmsCode(order, generatedCode, smsText);
-        if (wasFirstReceive) {
-          recordOtpOutcome(order.countryId, order.serviceCode, 'received');
+        if (statusText.startsWith('STATUS_OK:') || statusText === 'STATUS_CANCEL') {
+          await supabaseSyncSmsOrder(order);
         }
-      }
+      } catch {}
     }
   }
 
@@ -1177,19 +1613,7 @@ app.post('/api/grizzly/sms/set-status', async (req, res) => {
   }
 
   if (action === 'SIMULATE_SMS') {
-    const generatedCode = String(Math.floor(100000 + Math.random() * 900000));
-    const countNum = (order.smsHistory?.length || 0) + 1;
-    const smsText = `<#> كود تفعيل ${order.serviceNameAr} (الرسالة #${countNum}) الخاص بك هو: ${generatedCode}`;
-    order.status = 'SMS_RECEIVED';
-    order.smsCode = generatedCode;
-    order.fullSmsText = smsText;
-    order.smsDateTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    appendUniqueSmsCode(order, generatedCode, smsText);
-    return res.json({
-      order,
-      walletUsd: userWalletUsd,
-      walletSyp: Math.round(userWalletUsd * serverConfig.usdToSypRate),
-    });
+    return res.status(400).json({ error: 'وضع المحاكاة ملغى بالكامل في وضع الإنتاج الحقيقي.' });
   }
 
   if (action === 'READY_1') {
@@ -1417,11 +1841,25 @@ app.get('/api/grizzly/esim/catalog', async (req, res) => {
     }
   } catch {}
 
-  const fallbackPlans = FALLBACK_ESIM_PLANS.map((plan) => {
-    const finalPriceUsd = Number((plan.baseCostUsd * markupFactor).toFixed(2));
+  // Production Mode: never return hardcoded fallback plans — only real Supabase custom catalog (or empty list)
+  const customRows = await supabaseSelect<any>('esim_custom_catalog', '?is_available=eq.true&order=updated_at.desc');
+  const customPlans = customRows.map((r: any) => {
+    const baseCostUsd = Number(r.base_cost_usd || 0);
+    const finalPriceUsd = Number((baseCostUsd * markupFactor).toFixed(2));
     const finalPriceSyp = Math.ceil((finalPriceUsd * serverConfig.usdToSypRate) / 500) * 500;
+    const payload = (r.payload && typeof r.payload === 'object' ? r.payload : {}) as Record<string, any>;
     return {
-      ...plan,
+      ...payload,
+      id: String(r.id),
+      countryNameAr: String(r.country_name_ar || ''),
+      countryNameEn: String(payload.countryNameEn || r.country_name_ar || ''),
+      iso2: String(r.iso2 || 'un').toLowerCase(),
+      region: (r.region || 'local') as 'local' | 'regional' | 'global',
+      dataLabelAr: String(r.data_label_ar || ''),
+      dataAmountGb: payload.dataAmountGb ?? 1,
+      validityDays: Number(r.validity_days || 30),
+      networkType: String(r.network_type || '5G'),
+      baseCostUsd,
       finalPriceUsd,
       finalPriceSyp,
       isLiveGrizzlyCatalog: false,
@@ -1429,28 +1867,40 @@ app.get('/api/grizzly/esim/catalog', async (req, res) => {
   });
 
   res.json({
-    plans: fallbackPlans,
-    total: fallbackPlans.length,
+    plans: customPlans,
+    total: customPlans.length,
     page: 1,
-    source: 'FALLBACK_CATALOG',
+    source: 'SUPABASE_ESIM_CATALOG',
   });
 });
 
-app.post('/api/grizzly/esim/buy', (req, res) => {
+app.post('/api/grizzly/esim/buy', async (req, res) => {
   const buyer = getAuthUserFromRequest(req);
-  if (buyer) {
-    const restriction = checkUserRestriction(buyer);
-    if (restriction.blocked) {
-      return res.status(403).json({ error: restriction.error, code: 'ACCOUNT_RESTRICTED' });
-    }
+  if (!buyer) {
+    return res.status(401).json({ error: 'يرجى تسجيل الدخول أولاً لشراء شريحة eSIM.' });
+  }
+  const restriction = checkUserRestriction(buyer);
+  if (restriction.blocked) {
+    return res.status(403).json({ error: restriction.error, code: 'ACCOUNT_RESTRICTED' });
   }
   const { plan } = req.body;
   if (!plan || !plan.id) {
     return res.status(400).json({ error: 'بيانات الباقة غير صالحة.' });
   }
 
-  let finalPriceUsd = Number(plan.finalPriceUsd || 2.0);
-  if (buyer && buyer.role === 'RESELLER' && buyer.resellerDiscountPercent) {
+  // Load real balance directly from Supabase user_wallets
+  const walletRows = await supabaseSelect<any>(
+    'user_wallets',
+    `?user_id=eq.${encodeURIComponent(buyer.id)}&limit=1`
+  );
+  const currentBalanceUsd = walletRows[0] ? Number(walletRows[0].balance_usd || 0) : buyer.balanceUsd;
+  buyer.balanceUsd = Number(currentBalanceUsd.toFixed(2));
+
+  let finalPriceUsd = Number(plan.finalPriceUsd || 0);
+  if (!Number.isFinite(finalPriceUsd) || finalPriceUsd <= 0) {
+    return res.status(400).json({ error: 'سعر الباقة غير صالح.' });
+  }
+  if (buyer.role === 'RESELLER' && buyer.resellerDiscountPercent) {
     const baseUsd = Number(plan.baseCostUsd || finalPriceUsd * 0.75);
     finalPriceUsd = Number(
       Math.max(baseUsd * 1.03, finalPriceUsd * (1 - buyer.resellerDiscountPercent / 100)).toFixed(2)
@@ -1458,19 +1908,38 @@ app.post('/api/grizzly/esim/buy', (req, res) => {
   }
   const finalPriceSyp = Math.ceil((finalPriceUsd * serverConfig.usdToSypRate) / 500) * 500;
 
-  if (userWalletUsd < finalPriceUsd) {
+  if (buyer.balanceUsd < finalPriceUsd) {
     return res.status(400).json({
       error: 'رصيد المحفظة غير كافٍ لشراء شريحة الـ eSIM. يرجى شحن الرصيد أولاً.',
     });
   }
 
-  userWalletUsd = Number((userWalletUsd - finalPriceUsd).toFixed(2));
+  // Production Mode: allocate ONLY a real unused LPA profile from Supabase esim_lpa_inventory (never fabricate fake ICCIDs!)
+  const availableLpas = await supabaseSelect<any>(
+    'esim_lpa_inventory',
+    `?plan_id=eq.${encodeURIComponent(String(plan.id))}&is_used=eq.false&order=added_at.asc&limit=1`
+  );
+  const lpaItem = availableLpas[0];
+  if (!lpaItem) {
+    return res.status(400).json({
+      code: 'ESIM_OUT_OF_STOCK',
+      error:
+        'لا توجد شريحة eSIM جاهزة في مخزون المنصة لهذه الباقة حالياً. يرجى من الإدارة إضافة أكواد LPA حقيقية في المخزون أو ربط مزود eSIM حي.',
+    });
+  }
 
-  const randomIccid = `899001${Math.floor(1000000000000 + Math.random() * 8999999999999)}`;
-  const isoCode = String(plan.iso2 || 'tr').toUpperCase();
-  const activationToken = `ALI-${isoCode}-${Math.floor(100000 + Math.random() * 900000)}`;
-  const smdpAddress = 'smdp.alisms-cloud.net';
-  const lpaString = `LPA:1$${smdpAddress}$${activationToken}`;
+  const orderId = `ESIM-${Date.now().toString(36)}-${crypto.randomBytes(2).toString('hex')}`;
+  const markedUsed = await supabasePatch(
+    'esim_lpa_inventory',
+    `id=eq.${encodeURIComponent(String(lpaItem.id))}&is_used=eq.false`,
+    { is_used: true, assigned_order_id: orderId }
+  );
+  if (!markedUsed) {
+    return res.status(409).json({ error: 'تعذر حجز شريحة الـ eSIM من المخزون، يرجى المحاولة مجدداً.' });
+  }
+
+  buyer.balanceUsd = Number((buyer.balanceUsd - finalPriceUsd).toFixed(2));
+  userWalletUsd = buyer.balanceUsd;
 
   const totalDataMb =
     plan.dataAmountGb === 'unlimited'
@@ -1478,20 +1947,21 @@ app.post('/api/grizzly/esim/buy', (req, res) => {
       : Math.max(100, Math.round(Number(plan.dataAmountGb || 1) * 1024));
 
   const newESim = {
-    id: `ESIM-${Date.now().toString().slice(-5)}`,
-    iccid: randomIccid,
-    planId: plan.id,
-    countryNameAr: plan.countryNameAr,
-    iso2: String(plan.iso2 || 'tr').toLowerCase(),
-    dataLabelAr: plan.dataLabelAr,
+    id: orderId,
+    iccid: String(lpaItem.iccid),
+    planId: String(plan.id),
+    countryNameAr: String(lpaItem.country_name_ar || plan.countryNameAr),
+    iso2: String(lpaItem.iso2 || plan.iso2 || 'un').toLowerCase(),
+    dataLabelAr: String(lpaItem.data_label_ar || plan.dataLabelAr),
     totalDataMb,
     usedDataMb: 0,
     validityDays: Number(plan.validityDays || 7),
-    networkType: plan.networkType || '5G / LTE',
-    smdpAddress,
-    activationCode: activationToken,
-    lpaString,
+    networkType: String(plan.networkType || '5G / LTE'),
+    smdpAddress: String(lpaItem.smdp_address),
+    activationCode: String(lpaItem.activation_code),
+    lpaString: String(lpaItem.lpa_string),
     status: 'READY_TO_INSTALL',
+    baseCostUsd: Number(plan.baseCostUsd || 0),
     priceUsd: finalPriceUsd,
     priceSyp: finalPriceSyp,
     purchasedAt: Date.now(),
@@ -1499,11 +1969,23 @@ app.post('/api/grizzly/esim/buy', (req, res) => {
   };
 
   activeESimOrders.unshift(newESim);
+  persistOrdersAndPayments();
+  await Promise.all([
+    supabaseSyncESimOrder(newESim),
+    supabaseSyncWallet(buyer.id, buyer.nameAr, buyer.email, buyer.balanceUsd, buyer.role),
+    supabaseInsertActivityLog(
+      'ESIM_BUY',
+      `شراء شريحة eSIM (${newESim.countryNameAr})`,
+      `باقة ${newESim.dataLabelAr} — ICCID: ${newESim.iccid}`,
+      finalPriceUsd,
+      Math.max(0, Number((finalPriceUsd - Number(plan.baseCostUsd || 0)).toFixed(2)))
+    ),
+  ]);
 
   res.json({
     esimOrder: newESim,
-    walletUsd: userWalletUsd,
-    walletSyp: Math.round(userWalletUsd * serverConfig.usdToSypRate),
+    walletUsd: buyer.balanceUsd,
+    walletSyp: Math.round(buyer.balanceUsd * serverConfig.usdToSypRate),
   });
 });
 
@@ -2103,6 +2585,7 @@ app.post('/api/auth/register', (req, res) => {
   };
 
   authUsers.set(email, newUser);
+  supabaseSyncWallet(newUser.id, newUser.nameAr, newUser.email, 0, newUser.role, 0, 0).catch(() => {});
   if (ipRegs.length > 3) {
     recordFraudStrike({
       user: newUser,
@@ -2529,11 +3012,28 @@ app.get('/api/topups/receipt/:fileName', requireStaff, (req, res) => {
   res.sendFile(resolved);
 });
 
-app.get('/api/topups', requireStaff, (_req, res) => {
-  res.json({ requests: serverTopUpRequests, topUps: serverTopUpRequests });
+app.get('/api/topups', requireStaff, async (_req, res) => {
+  const dbRows = await supabaseSelect<any>('topup_requests', '?select=*&order=created_at.desc&limit=200');
+  const mapped = dbRows.map((t: any) => ({
+    id: String(t.id),
+    userId: String(t.user_id),
+    userNameAr: String(t.user_name_ar || 'عميل المنصة'),
+    gatewayId: String(t.gateway_id),
+    gatewayNameAr: String(t.gateway_name_ar || t.gateway_id),
+    referenceId: String(t.reference_id),
+    amountOriginal: Number(t.amount_original || 0),
+    currencyOriginal: (t.currency_original || 'USD') as 'USD' | 'USDT' | 'SYP' | 'TRY',
+    equivalentUsd: Number(t.equivalent_usd || 0),
+    equivalentSyp: Number(t.equivalent_syp || 0),
+    status: (t.status || 'PENDING') as 'PENDING' | 'APPROVED' | 'REJECTED',
+    rejectionReason: t.rejection_reason || undefined,
+    createdAt: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
+    processedAt: t.processed_at ? new Date(t.processed_at).getTime() : undefined,
+  }));
+  res.json({ requests: mapped, topUps: mapped });
 });
 
-app.post('/api/topups', (req, res) => {
+app.post('/api/topups', async (req, res) => {
   const authUser = getAuthUserFromRequest(req);
   if (authUser) {
     const restriction = checkUserRestriction(authUser);
@@ -2562,8 +3062,12 @@ app.post('/api/topups', (req, res) => {
     return res.status(400).json({ error: 'بيانات طلب الشحن غير مكتملة.' });
   }
 
-  // Global cross-account duplicate Reference ID guard (blocks duplicate across ALL accounts!)
-  if (usedReferenceRegistry.has(normRef) || usedPaymentReferences.has(cleanRef)) {
+  // Global cross-account duplicate Reference ID guard (check both server registry and live Supabase DB!)
+  const existingDbRef = await supabaseSelect<any>(
+    'topup_requests',
+    `?reference_id=ilike.${encodeURIComponent(cleanRef)}&status=in.(PENDING,APPROVED)&limit=1`
+  );
+  if (existingDbRef.length > 0 || usedReferenceRegistry.has(normRef) || usedPaymentReferences.has(cleanRef)) {
     recordFraudStrike({
       user: authUser,
       ipAddress: req.ip || 'unknown',
@@ -2635,13 +3139,62 @@ app.post('/api/topups', (req, res) => {
     createdAt: Date.now(),
   };
 
-  // Check if ShamCash MacroDroid webhook already received this transfer as UNCLAIMED
-  const isShamCashGateway =
-    /sham|شام/i.test(record.gatewayId) || /sham|شام/i.test(record.gatewayNameAr);
+  // Write directly to Supabase topup_requests — triggers PostgreSQL trg_auto_claim_shamcash_on_topup_insert automatically!
   let autoApproved = false;
   let newBalanceUsd: number | undefined;
 
-  if (isShamCashGateway) {
+  const dbInsert = await supabaseUpsert<any>(
+    'topup_requests',
+    [
+      {
+        id: record.id,
+        user_id: record.userId,
+        user_name_ar: record.userNameAr,
+        gateway_id: record.gatewayId,
+        gateway_name_ar: record.gatewayNameAr,
+        reference_id: record.referenceId,
+        amount_original: record.amountOriginal,
+        currency_original: record.currencyOriginal,
+        equivalent_usd: record.equivalentUsd,
+        equivalent_syp: record.equivalentSyp,
+        status: 'PENDING',
+        created_at: new Date(record.createdAt).toISOString(),
+      },
+    ],
+    'id'
+  );
+
+  // Re-check row in Supabase in case ShamCash PostgreSQL trigger auto-matched an incoming MacroDroid transfer!
+  if (dbInsert.ok) {
+    const checkRows = await supabaseSelect<any>(
+      'topup_requests',
+      `?id=eq.${encodeURIComponent(record.id)}&limit=1`
+    );
+    if (checkRows[0]?.status === 'APPROVED') {
+      autoApproved = true;
+      record.status = 'APPROVED';
+      record.equivalentUsd = Number(Number(checkRows[0].equivalent_usd || record.equivalentUsd).toFixed(2));
+      record.equivalentSyp = Math.round(Number(checkRows[0].equivalent_syp || record.equivalentSyp));
+      record.processedAt = Date.now();
+      record.reviewedBy = 'ShamCash Webhook Auto-Match (Supabase)';
+
+      const walletCheck = await supabaseSelect<any>(
+        'user_wallets',
+        `?user_id=eq.${encodeURIComponent(record.userId)}&limit=1`
+      );
+      if (walletCheck[0]) {
+        newBalanceUsd = Number(Number(walletCheck[0].balance_usd || 0).toFixed(2));
+        if (authUser) authUser.balanceUsd = newBalanceUsd;
+        userWalletUsd = newBalanceUsd;
+      }
+    }
+  }
+
+  // Also check local Express ShamCash pool if not yet auto-approved via Supabase
+  const isShamCashGateway =
+    /sham|شام/i.test(record.gatewayId) || /sham|شام/i.test(record.gatewayNameAr);
+
+  if (!autoApproved && isShamCashGateway) {
     const incoming = verifiedIncomingShamCashPool.get(normRef);
     if (incoming && incoming.status === 'UNCLAIMED') {
       const sameCurrencyMatch =
@@ -2665,9 +3218,22 @@ app.post('/api/topups', (req, res) => {
         if (authUser) {
           authUser.balanceUsd = Number((authUser.balanceUsd + record.equivalentUsd).toFixed(2));
           newBalanceUsd = authUser.balanceUsd;
+          await supabaseSyncWallet(
+            authUser.id,
+            authUser.nameAr,
+            authUser.email,
+            authUser.balanceUsd,
+            authUser.role
+          );
         } else {
           newBalanceUsd = userWalletUsd;
         }
+        await supabasePatch('topup_requests', `id=eq.${encodeURIComponent(record.id)}`, {
+          status: 'APPROVED',
+          equivalent_usd: record.equivalentUsd,
+          equivalent_syp: record.equivalentSyp,
+          processed_at: new Date().toISOString(),
+        });
         autoApproved = true;
       }
     }
@@ -2687,15 +3253,36 @@ app.post('/api/topups', (req, res) => {
   res.json({ topUp: record, autoApproved, newBalanceUsd });
 });
 
-app.post('/api/topups/:id/review', requireStaff, (req, res) => {
+app.post('/api/topups/:id/review', requireStaff, async (req, res) => {
   const reviewer: AuthRecord = (req as any).authUser;
   const id = String(req.params.id);
   const action = String(req.body?.action || '').toUpperCase();
   const reason = String(req.body?.reason || '').trim().slice(0, 200);
 
-  const item = serverTopUpRequests.find((t) => t.id === id);
+  let item = serverTopUpRequests.find((t) => t.id === id);
   if (!item) {
-    return res.status(404).json({ error: 'طلب الشحن غير موجود على الخادم.' });
+    const dbRows = await supabaseSelect<any>('topup_requests', `?id=eq.${encodeURIComponent(id)}&limit=1`);
+    if (dbRows[0]) {
+      const r = dbRows[0];
+      item = {
+        id: String(r.id),
+        userId: String(r.user_id),
+        userNameAr: String(r.user_name_ar || 'عميل المنصة'),
+        gatewayId: String(r.gateway_id),
+        gatewayNameAr: String(r.gateway_name_ar || r.gateway_id),
+        referenceId: String(r.reference_id),
+        amountOriginal: Number(r.amount_original || 0),
+        currencyOriginal: (r.currency_original || 'USD') as 'USD' | 'USDT' | 'SYP' | 'TRY',
+        equivalentUsd: Number(r.equivalent_usd || 0),
+        equivalentSyp: Number(r.equivalent_syp || 0),
+        status: (r.status || 'PENDING') as 'PENDING' | 'APPROVED' | 'REJECTED',
+        createdAt: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+      };
+      serverTopUpRequests.unshift(item);
+    }
+  }
+  if (!item) {
+    return res.status(404).json({ error: 'طلب الشحن غير موجود في قاعدة البيانات.' });
   }
   if (item.status !== 'PENDING') {
     return res.status(400).json({ error: 'تمت معالجة هذا الطلب مسبقاً.' });
@@ -2707,11 +3294,42 @@ app.post('/api/topups/:id/review', requireStaff, (req, res) => {
     item.status = 'APPROVED';
     item.processedAt = Date.now();
     item.reviewedBy = `${reviewer.nameAr} (${reviewer.role})`;
-    userWalletUsd = Number((userWalletUsd + item.equivalentUsd).toFixed(2));
-    const owner = Array.from(authUsers.values()).find((u) => u.id === item.userId);
+
+    // Read real wallet balance from Supabase and credit atomically
+    const wRows = await supabaseSelect<any>(
+      'user_wallets',
+      `?user_id=eq.${encodeURIComponent(item.userId)}&limit=1`
+    );
+    const prevBal = wRows[0] ? Number(wRows[0].balance_usd || 0) : 0;
+    const nextBal = Number((prevBal + item.equivalentUsd).toFixed(2));
+
+    userWalletUsd = nextBal;
+    const owner = Array.from(authUsers.values()).find((u) => u.id === item!.userId);
     if (owner) {
-      owner.balanceUsd = Number((owner.balanceUsd + item.equivalentUsd).toFixed(2));
+      owner.balanceUsd = nextBal;
     }
+
+    await Promise.all([
+      supabasePatch('topup_requests', `id=eq.${encodeURIComponent(item.id)}`, {
+        status: 'APPROVED',
+        processed_at: new Date().toISOString(),
+      }),
+      supabaseSyncWallet(
+        item.userId,
+        item.userNameAr,
+        owner?.email || wRows[0]?.email_or_phone || '',
+        nextBal,
+        owner?.role || wRows[0]?.role || 'USER'
+      ),
+      supabaseInsertActivityLog(
+        'TOPUP_APPROVE',
+        `اعتماد شحن رصيد #${item.referenceId}`,
+        `موافقة ${reviewer.nameAr} على طلب ${item.userNameAr} بقيمة $${item.equivalentUsd.toFixed(2)}`,
+        item.equivalentUsd,
+        0
+      ),
+    ]);
+
     usedReferenceRegistry.set(normRef, {
       userId: item.userId,
       userNameAr: item.userNameAr,
@@ -2731,7 +3349,22 @@ app.post('/api/topups/:id/review', requireStaff, (req, res) => {
     item.rejectionReason = reason || 'تعذر التحقق من الإشعار';
     item.processedAt = Date.now();
     item.reviewedBy = `${reviewer.nameAr} (${reviewer.role})`;
-    // Release pending reference on rejection so genuine typos can be corrected
+
+    await Promise.all([
+      supabasePatch('topup_requests', `id=eq.${encodeURIComponent(item.id)}`, {
+        status: 'REJECTED',
+        rejection_reason: item.rejectionReason,
+        processed_at: new Date().toISOString(),
+      }),
+      supabaseInsertActivityLog(
+        'TOPUP_REJECT',
+        `رفض طلب شحن #${item.referenceId}`,
+        `رفض بواسطة ${reviewer.nameAr} — السبب: ${item.rejectionReason}`,
+        0,
+        0
+      ),
+    ]);
+
     const reg = usedReferenceRegistry.get(normRef);
     if (reg && reg.status === 'PENDING') {
       usedReferenceRegistry.delete(normRef);
@@ -2745,8 +3378,7 @@ app.post('/api/topups/:id/review', requireStaff, (req, res) => {
       item.equivalentUsd,
       item.rejectionReason
     );
-    // Record fraud strike when staff rejects a top-up for fake/mismatched proof
-    const ownerAcc = Array.from(authUsers.values()).find((u) => u.id === item.userId);
+    const ownerAcc = Array.from(authUsers.values()).find((u) => u.id === item!.userId);
     recordFraudStrike({
       user: ownerAcc,
       userId: item.userId,
@@ -4659,8 +5291,43 @@ app.post('/api/payments/invoice/:id/verify', async (req, res) => {
     };
 
     paymentHistory.unshift(tx);
+    persistOrdersAndPayments();
 
     const newBalanceUsd = authUser ? authUser.balanceUsd : userWalletUsd;
+    await Promise.all([
+      supabaseUpsert(
+        'topup_requests',
+        [
+          {
+            id: tx.id,
+            user_id: authUser?.id || ownerKey,
+            user_name_ar: authUser?.nameAr || 'عميل المنصة',
+            gateway_id: invoice.gateway,
+            gateway_name_ar: gatewayLabelAr,
+            reference_id: finalRef,
+            amount_original: creditedUsd,
+            currency_original: 'USDT',
+            equivalent_usd: creditedUsd,
+            equivalent_syp: creditedSyp,
+            status: 'APPROVED',
+            created_at: new Date(tx.createdAt).toISOString(),
+            processed_at: new Date().toISOString(),
+          },
+        ],
+        'id'
+      ),
+      authUser
+        ? supabaseSyncWallet(authUser.id, authUser.nameAr, authUser.email, authUser.balanceUsd, authUser.role)
+        : Promise.resolve(),
+      supabaseInsertActivityLog(
+        'TOPUP_APPROVE',
+        `شحن آلي مؤكد عبر ${gatewayLabelAr}`,
+        `عملية #${finalRef} بقيمة $${creditedUsd.toFixed(2)} (${checkResult.mode})`,
+        creditedUsd,
+        0
+      ),
+    ]);
+
     res.json({
       ok: true,
       invoice,
@@ -5200,6 +5867,26 @@ app.post('/api/admin/settings', requireAdmin, async (req, res) => {
   ) {
     serverConfig.lowProviderBalanceThresholdUsd = Number(lowProviderBalanceThresholdUsd.toFixed(2));
   }
+
+  await supabaseUpsert(
+    'app_settings',
+    [
+      {
+        id: 'global_config',
+        sms_markup_percent: serverConfig.smsMarkupPercent,
+        esim_markup_percent: serverConfig.esimMarkupPercent,
+        usd_to_syp_rate: serverConfig.usdToSypRate,
+        usd_to_try_rate: serverConfig.usdToTryRate,
+        rub_to_usd_rate: serverConfig.rubToUsdRate,
+        syriatel_merchant_code: serverConfig.syriatelMerchantCode,
+        syriatel_merchant_name: serverConfig.syriatelMerchantName,
+        shamcash_wallet_address: serverConfig.shamcashWalletAddress,
+        shamcash_account_holder: serverConfig.shamcashAccountHolder,
+        updated_at: new Date().toISOString(),
+      },
+    ],
+    'id'
+  );
 
   appendStaffAuditLog(
     (req as any).authUser,

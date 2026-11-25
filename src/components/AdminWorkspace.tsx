@@ -299,13 +299,9 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
   const [lowBalanceThreshold, setLowBalanceThreshold] = useState(
     String(settings.lowProviderBalanceThresholdUsd ?? 10)
   );
-  const [binancePayIdInput, setBinancePayIdInput] = useState(settings.binancePayId || '1073784382');
-  const [usdtTrc20Input, setUsdtTrc20Input] = useState(
-    settings.binanceUsdtTrc20 || 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE'
-  );
-  const [usdtBep20Input, setUsdtBep20Input] = useState(
-    settings.binanceUsdtBep20 || '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18'
-  );
+  const [binancePayIdInput, setBinancePayIdInput] = useState(settings.binancePayId || '');
+  const [usdtTrc20Input, setUsdtTrc20Input] = useState(settings.binanceUsdtTrc20 || '');
+  const [usdtBep20Input, setUsdtBep20Input] = useState(settings.binanceUsdtBep20 || '');
   const [savingAutoPayAddrs, setSavingAutoPayAddrs] = useState(false);
   const [syncingSyriaToday, setSyncingSyriaToday] = useState(false);
 
@@ -4456,7 +4452,7 @@ export const AdminWorkspace: React.FC<AdminWorkspaceProps> = ({
                       type="text"
                       value={binancePayIdInput}
                       onChange={(e) => setBinancePayIdInput(e.target.value)}
-                      placeholder="1073784382"
+                      placeholder="أدخل Binance Pay ID الخاص بحسابك"
                       dir="ltr"
                       className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-[#070A12] border border-white/10 text-white"
                     />

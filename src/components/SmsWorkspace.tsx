@@ -37,7 +37,7 @@ interface SmsWorkspaceProps {
   selectedCountryId: string;
   onSelectCountry: (id: string) => void;
   services: GrizzlyServiceItem[];
-  sourceMode: 'LIVE_GRIZZLY_API' | 'SIMULATED_CATALOG';
+  sourceMode: 'LIVE_GRIZZLY_API';
   loadingCatalog: boolean;
   onRefreshCatalog: () => void;
   currency: SupportedCurrency;
@@ -59,7 +59,7 @@ interface SmsWorkspaceProps {
   activeSmsOrders: ActiveSmsOrder[];
   onSmsOrderAction: (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => Promise<void>;
   onSyncActiveFromGrizzly: () => Promise<void>;
   onOpenGuides?: () => void;

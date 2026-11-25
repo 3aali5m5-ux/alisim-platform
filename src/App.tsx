@@ -78,12 +78,6 @@ import {
   loadFromStorage,
   saveToStorage,
   DEFAULT_CMS_CONFIG,
-  DEFAULT_PAYMENT_GATEWAYS,
-  DEFAULT_MANAGED_USERS,
-  DEFAULT_PRICING_OVERRIDES,
-  DEFAULT_LPA_INVENTORY,
-  DEFAULT_TOPUP_REQUESTS,
-  DEFAULT_ACTIVITY_LOGS,
   formatCurrencyAmount,
   convertCurrencyToUsd,
   playCyberChime,
@@ -115,14 +109,12 @@ export default function App() {
   const [guidesModalOpen, setGuidesModalOpen] = useState<boolean>(false);
   const [guidesInitialTab, setGuidesInitialTab] = useState<'sms' | 'esim' | 'disclaimer'>('sms');
 
-  // Core Platform State
-  const [walletUsd, setWalletUsd] = useState<number>(14.5);
+  // Core Platform State (Production Mode: 100% hydrated from live Supabase via /api/bootstrap)
+  const [walletUsd, setWalletUsd] = useState<number>(0);
   const [countries, setCountries] = useState<GrizzlyCountry[]>([]);
   const [selectedCountryId, setSelectedCountryId] = useState<string>('16');
   const [smsServices, setSmsServices] = useState<GrizzlyServiceItem[]>([]);
-  const [smsSourceMode, setSmsSourceMode] = useState<'LIVE_GRIZZLY_API' | 'SIMULATED_CATALOG'>(
-    'SIMULATED_CATALOG'
-  );
+  const [smsSourceMode, setSmsSourceMode] = useState<'LIVE_GRIZZLY_API'>('LIVE_GRIZZLY_API');
 
   // Live eSIM State
   const [esimPlans, setEsimPlans] = useState<ESimPlan[]>([]);
@@ -148,174 +140,44 @@ export default function App() {
     smsMarkupPercent: 25,
     esimMarkupPercent: 20,
     usdToSypRate: 14800,
-    usdToTryRate: 34.5,
+    usdToTryRate: 50.5,
     usdToUsdtRate: 1.0,
     rubToUsdRate: 0.0108,
-    syriatelMerchantCode: '0933884421 (رمز التاجر: 482910)',
-    syriatelMerchantName: 'شركة AliSMS للاتصالات الرقمية',
-    shamcashWalletAddress: '67de67e57bdc42690f935bab415e5c6e',
-    shamcashAccountHolder: 'AliSMS Telecom Syria',
-    binancePayId: '1073784382',
-    binanceUsdtTrc20: 'TQn9Y2khEsLJW1ChVWFMSMeRDow5KcbLSE',
-    binanceUsdtBep20: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
+    syriatelMerchantCode: '',
+    syriatelMerchantName: '',
+    shamcashWalletAddress: '',
+    shamcashAccountHolder: '',
+    binancePayId: '',
+    binanceUsdtTrc20: '',
+    binanceUsdtBep20: '',
     hasBinanceApiKeys: false,
     autoVerifyPayments: true,
   });
 
-  // Dynamic CMS & Platform Slices
-  const [cmsConfig, setCmsConfig] = useState<SiteCmsConfig>(() => {
-    const stored = loadFromStorage(STORAGE_KEYS.CMS_CFG, DEFAULT_CMS_CONFIG);
-    return {
-      ...DEFAULT_CMS_CONFIG,
-      ...stored,
-      heroSlides:
-        Array.isArray(stored.heroSlides) && stored.heroSlides.length > 0
-          ? stored.heroSlides
-          : DEFAULT_CMS_CONFIG.heroSlides,
-    };
-  });
-  const [pricingOverrides, setPricingOverrides] = useState<PricingOverrideRule[]>(() =>
-    loadFromStorage(STORAGE_KEYS.PRICING_OVERRIDES, DEFAULT_PRICING_OVERRIDES)
-  );
-  const [paymentGateways, setPaymentGateways] = useState<PaymentGatewayConfig[]>(() => {
-    const stored = loadFromStorage(STORAGE_KEYS.PAYMENT_GATEWAYS, DEFAULT_PAYMENT_GATEWAYS);
-    const migrated = stored.map((gw) => {
-      if (gw.code === 'binance') {
-        return {
-          ...gw,
-          isAutomated: true,
-          accountAddress: gw.accountAddress === '849201928' ? '1073784382' : gw.accountAddress,
-          qrCodeText:
-            gw.accountAddress === '849201928'
-              ? 'BINANCEPAY:1073784382'
-              : gw.qrCodeText || `BINANCEPAY:${gw.accountAddress}`,
-        };
-      }
-      if (gw.code === 'shamcash') {
-        return {
-          ...gw,
-          isAutomated: false,
-          allowReceiptUpload: true,
-          requireReceiptUpload: true,
-          accountAddress:
-            gw.accountAddress === 'SHAM-8849201-SYR'
-              ? '67de67e57bdc42690f935bab415e5c6e'
-              : gw.accountAddress,
-          qrCodeText:
-            gw.accountAddress === 'SHAM-8849201-SYR'
-              ? '67de67e57bdc42690f935bab415e5c6e'
-              : gw.qrCodeText || gw.accountAddress,
-        };
-      }
-      if (gw.code === 'syriatel') {
-        return {
-          ...gw,
-          isAutomated: false,
-          allowReceiptUpload: true,
-          requireReceiptUpload: true,
-        };
-      }
-      return gw;
-    });
-
-    // Inject USDT-TRC20 and USDT-BEP20 on-chain gateways if missing from older localStorage cache
-    const hasTrc20 = migrated.some((g) => g.code === 'usdt_trc20');
-    const hasBep20 = migrated.some((g) => g.code === 'usdt_bep20');
-    const extras: PaymentGatewayConfig[] = [];
-    if (!hasTrc20) {
-      const def = DEFAULT_PAYMENT_GATEWAYS.find((g) => g.code === 'usdt_trc20');
-      if (def) extras.push(def);
-    }
-    if (!hasBep20) {
-      const def = DEFAULT_PAYMENT_GATEWAYS.find((g) => g.code === 'usdt_bep20');
-      if (def) extras.push(def);
-    }
-    if (extras.length > 0) {
-      const binanceIdx = migrated.findIndex((g) => g.code === 'binance');
-      if (binanceIdx >= 0) {
-        migrated.splice(binanceIdx + 1, 0, ...extras);
-      } else {
-        migrated.unshift(...extras);
-      }
-    }
-    return migrated;
-  });
-  const [topUpRequests, setTopUpRequests] = useState<TopUpOrderRequest[]>(() => {
-    const stored = loadFromStorage<TopUpOrderRequest[]>(
-      STORAGE_KEYS.TOPUP_REQUESTS,
-      DEFAULT_TOPUP_REQUESTS
-    );
-    return stored.filter((r) => r.id !== 'topup-req-101' && r.id !== 'topup-req-102');
-  });
-  const [managedUsers, setManagedUsers] = useState<ManagedUserAccount[]>(() => {
-    const stored = loadFromStorage<ManagedUserAccount[]>(
-      STORAGE_KEYS.MANAGED_USERS,
-      DEFAULT_MANAGED_USERS
-    );
-    return stored
-      .filter(
-        (u) =>
-          u.id !== 'usr-client-1' &&
-          u.emailOrPhone?.toLowerCase() !== 'ahmad.sh@gmail.com'
-      )
-      .map((u) => ({
-        ...u,
-        role:
-          u.role === 'ADMIN'
-            ? 'ADMIN'
-            : u.role === 'MODERATOR'
-            ? 'MODERATOR'
-            : u.role === 'RESELLER'
-            ? 'RESELLER'
-            : 'USER',
-      }));
-  });
-  const [customESimPlans, setCustomESimPlans] = useState<ESimPlan[]>(() =>
-    loadFromStorage(STORAGE_KEYS.CUSTOM_ESIM_PLANS, [])
-  );
-  const [lpaInventory, setLpaInventory] = useState<ESimLpaInventoryItem[]>(() => {
-    const stored = loadFromStorage<ESimLpaInventoryItem[]>(
-      STORAGE_KEYS.LPA_INVENTORY,
-      DEFAULT_LPA_INVENTORY
-    );
-    return stored.filter((i) => i.id !== 'lpa-inv-1' && i.id !== 'lpa-inv-2');
-  });
-  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>(() => {
-    const stored = loadFromStorage<ActivityLogEntry[]>(
-      STORAGE_KEYS.ACTIVITY_LOGS,
-      DEFAULT_ACTIVITY_LOGS
-    );
-    return stored.filter(
-      (a) => a.id !== 'act-1' && a.id !== 'act-2' && a.id !== 'act-3'
-    );
-  });
-  const [pinnedCountries, setPinnedCountries] = useState<string[]>(() =>
-    loadFromStorage(STORAGE_KEYS.PINNED_COUNTRIES, ['16', '22', '73'])
-  );
-  const [pinnedServices, setPinnedServices] = useState<string[]>(() =>
-    loadFromStorage(STORAGE_KEYS.PINNED_SERVICES, ['wa', 'tg', 'go', 'oi'])
-  );
-  const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfigState>(() => {
-    const stored = loadFromStorage<SupabaseConfigState>(STORAGE_KEYS.SUPABASE_CFG, {
-      supabaseUrl: '',
-      supabaseAnonKey: '',
-      isConnected: false,
-      lastSyncAt: null,
-      syncStatusText: 'يتم الاتصال السحابي بقاعدة Supabase بشكل آمن عبر الخادم فقط',
-      completedPatches: {
-        'v1.0': true,
-        'v1.1': true,
-        'v1.2': true,
-        'v1.3': false,
-        'v1.4': false,
-      },
-    });
-    // Never keep Supabase URL or keys in browser localStorage
-    return {
-      ...stored,
-      supabaseUrl: '',
-      supabaseAnonKey: '',
-    };
+  // Dynamic CMS & Platform Slices — strictly hydrated from live Supabase DB (zero mock/localStorage seed data)
+  const [cmsConfig, setCmsConfig] = useState<SiteCmsConfig>(DEFAULT_CMS_CONFIG);
+  const [pricingOverrides, setPricingOverrides] = useState<PricingOverrideRule[]>([]);
+  const [paymentGateways, setPaymentGateways] = useState<PaymentGatewayConfig[]>([]);
+  const [topUpRequests, setTopUpRequests] = useState<TopUpOrderRequest[]>([]);
+  const [managedUsers, setManagedUsers] = useState<ManagedUserAccount[]>([]);
+  const [customESimPlans, setCustomESimPlans] = useState<ESimPlan[]>([]);
+  const [lpaInventory, setLpaInventory] = useState<ESimLpaInventoryItem[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([]);
+  const [pinnedCountries, setPinnedCountries] = useState<string[]>([]);
+  const [pinnedServices, setPinnedServices] = useState<string[]>([]);
+  const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfigState>({
+    supabaseUrl: '',
+    supabaseAnonKey: '',
+    isConnected: false,
+    lastSyncAt: null,
+    syncStatusText: 'يتم الاتصال السحابي بقاعدة Supabase بشكل آمن عبر الخادم فقط',
+    completedPatches: {
+      'v1.0': true,
+      'v1.1': true,
+      'v1.2': true,
+      'v1.3': true,
+      'v1.4': true,
+    },
   });
 
   // UI States
@@ -691,16 +553,26 @@ export default function App() {
     });
   }, []);
 
-  useEffect(() => saveToStorage(STORAGE_KEYS.CMS_CFG, cmsConfig), [cmsConfig]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.PRICING_OVERRIDES, pricingOverrides), [pricingOverrides]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.PAYMENT_GATEWAYS, paymentGateways), [paymentGateways]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.TOPUP_REQUESTS, topUpRequests), [topUpRequests]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.MANAGED_USERS, managedUsers), [managedUsers]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.CUSTOM_ESIM_PLANS, customESimPlans), [customESimPlans]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.LPA_INVENTORY, lpaInventory), [lpaInventory]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.PINNED_COUNTRIES, pinnedCountries), [pinnedCountries]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.PINNED_SERVICES, pinnedServices), [pinnedServices]);
-  useEffect(() => saveToStorage(STORAGE_KEYS.SUPABASE_CFG, supabaseConfig), [supabaseConfig]);
+  // Purge any legacy browser-cached demo/business keys on mount so only live Supabase data renders
+  useEffect(() => {
+    try {
+      [
+        STORAGE_KEYS.CMS_CFG,
+        STORAGE_KEYS.PRICING_OVERRIDES,
+        STORAGE_KEYS.PAYMENT_GATEWAYS,
+        STORAGE_KEYS.TOPUP_REQUESTS,
+        STORAGE_KEYS.MANAGED_USERS,
+        STORAGE_KEYS.CUSTOM_ESIM_PLANS,
+        STORAGE_KEYS.LPA_INVENTORY,
+        STORAGE_KEYS.ACTIVITY_LOGS,
+        STORAGE_KEYS.SUPABASE_CFG,
+        STORAGE_KEYS.PINNED_COUNTRIES,
+        STORAGE_KEYS.PINNED_SERVICES,
+      ].forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
 
   const updateCurrentUserWallet = useCallback(
     (newBalanceUsd: number, addedSpendUsd = 0) => {
@@ -820,42 +692,56 @@ export default function App() {
 
   const fetchBootstrap = useCallback(async () => {
     try {
-      const res = await fetch('/api/bootstrap');
+      const res = await fetch('/api/bootstrap', {
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+      });
       if (!res.ok) return;
       const data = await res.json();
-      setWalletUsd(data.walletUsd);
+      setWalletUsd(typeof data.walletUsd === 'number' ? data.walletUsd : 0);
       setCountries(data.countries || []);
+      if (data.cmsConfig && typeof data.cmsConfig === 'object') {
+        setCmsConfig((prev) => ({
+          ...prev,
+          ...data.cmsConfig,
+        }));
+      }
+      if (Array.isArray(data.paymentGateways)) {
+        setPaymentGateways(data.paymentGateways);
+      }
+      if (Array.isArray(data.pricingOverrides)) {
+        setPricingOverrides(data.pricingOverrides);
+      }
+      if (Array.isArray(data.customESimPlans)) {
+        setCustomESimPlans(data.customESimPlans);
+      }
+      if (Array.isArray(data.topUpRequests)) {
+        setTopUpRequests(data.topUpRequests);
+      }
+      if (Array.isArray(data.managedUsers)) {
+        setManagedUsers(data.managedUsers);
+      }
+      if (Array.isArray(data.activityLogs)) {
+        setActivityLogs(data.activityLogs);
+      }
+      if (Array.isArray(data.lpaInventory)) {
+        setLpaInventory(data.lpaInventory);
+      }
+      if (Array.isArray(data.pinnedCountries)) {
+        setPinnedCountries(data.pinnedCountries);
+      }
+      if (Array.isArray(data.pinnedServices)) {
+        setPinnedServices(data.pinnedServices);
+      }
       setSettings((prev) => ({
         ...prev,
         ...data.settings,
       }));
       if (data.settings) {
-        setPaymentGateways((prev) =>
-          prev.map((g) => {
-            if (g.code === 'binance' && data.settings.binancePayId) {
-              return {
-                ...g,
-                accountAddress: data.settings.binancePayId,
-                qrCodeText: `BINANCEPAY:${data.settings.binancePayId}`,
-              };
-            }
-            if (g.code === 'usdt_trc20' && data.settings.binanceUsdtTrc20) {
-              return {
-                ...g,
-                accountAddress: data.settings.binanceUsdtTrc20,
-                qrCodeText: data.settings.binanceUsdtTrc20,
-              };
-            }
-            if (g.code === 'usdt_bep20' && data.settings.binanceUsdtBep20) {
-              return {
-                ...g,
-                accountAddress: data.settings.binanceUsdtBep20,
-                qrCodeText: data.settings.binanceUsdtBep20,
-              };
-            }
-            return g;
-          })
-        );
+        setSupabaseConfig((prev) => ({
+          ...prev,
+          isConnected: Boolean(data.settings.hasSupabaseConfig && data.settings.supabaseTablesReady),
+          syncStatusText: data.settings.supabaseStatusMessage || prev.syncStatusText,
+        }));
       }
       setActiveSmsOrders(data.activeSmsOrders || []);
       setActiveESimOrders(data.activeESimOrders || []);
@@ -863,7 +749,7 @@ export default function App() {
     } catch {
       // Ignore
     }
-  }, []);
+  }, [authToken]);
 
   const fetchSmsCatalog = useCallback(
     async (countryId: string) => {
@@ -875,7 +761,7 @@ export default function App() {
         if (!res.ok) return;
         const data = await res.json();
         setSmsServices(data.services || []);
-        setSmsSourceMode(data.sourceMode || 'SIMULATED_CATALOG');
+        setSmsSourceMode('LIVE_GRIZZLY_API');
       } finally {
         setLoadingSmsCatalog(false);
       }
@@ -1090,7 +976,7 @@ export default function App() {
 
   const handleSmsOrderAction = async (
     orderId: string,
-    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8' | 'SIMULATE_SMS'
+    action: 'READY_1' | 'RETRY_3' | 'COMPLETE_6' | 'CANCEL_8'
   ) => {
     try {
       const res = await fetch('/api/grizzly/sms/set-status', {
@@ -1142,17 +1028,6 @@ export default function App() {
           'success'
         );
         showToast('success', 'تم تأكيد وإنهاء التفعيل بنجاح.');
-      } else if (action === 'SIMULATE_SMS') {
-        const otp = extractOtpFromText(data.order.fullSmsText) || data.order.smsCode;
-        if (otp) notifiedOtpIdsRef.current.add(`${data.order.id}-${otp}`);
-        const count = Array.isArray(data.order.smsHistory) ? data.order.smsHistory.length : 1;
-        pushNotification(
-          'otp',
-          `وصل الكود #${count}: ${otp}`,
-          `لخدمة ${data.order.serviceNameAr} على الرقم ${data.order.phoneNumber}`,
-          'otp'
-        );
-        showToast('success', `وصل كود التفعيل #${count}: ${otp}`);
       }
     } catch {
       showToast('error', 'حدث خطأ في الاتصال');
