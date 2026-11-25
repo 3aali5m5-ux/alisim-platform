@@ -1,0 +1,6 @@
+{
+  "name": "Grizzly Connect — eSIM & SMS Hub",
+  "description": "منصة احترافية لشراء شرائح البيانات الإلكترونية eSIM وأرقام تفعيل الحسابات SMS عبر GrizzlySMS مع شحن فوري عبر شام كاش وسيرياتيل كاش وباينانس باي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="112" fill="#0B0F19"/>
+  <rect x="32" y="32" width="448" height="448" rx="88" stroke="#10B981" stroke-width="6" stroke-opacity="0.25"/>
+  <!-- SIM Card Chip Outline -->
+  <path d="M156 120H292L356 184V392C356 409.673 341.673 424 324 424H156C138.327 424 124 409.673 124 392V152C124 134.327 138.327 120 156 120Z" fill="#111827" stroke="#10B981" stroke-width="16" stroke-linejoin="round"/>
+  <!-- Gold eSIM Circuit Pad -->
+  <rect x="176" y="220" width="128" height="104" rx="20" fill="#F59E0B" fill-opacity="0.15" stroke="#F59E0B" stroke-width="12"/>
+  <line x1="240" y1="220" x2="240" y2="324" stroke="#F59E0B" stroke-width="10"/>
+  <line x1="176" y1="272" x2="304" y2="272" stroke="#F59E0B" stroke-width="10"/>
+  <!-- Signal Waves -->
+  <path d="M348 112C378 126 398 146 412 176" stroke="#3B82F6" stroke-width="16" stroke-linecap="round"/>
+  <path d="M368 76C414 96 444 126 464 172" stroke="#10B981" stroke-width="16" stroke-linecap="round"/>
+</svg>

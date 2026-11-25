@@ -1,0 +1,417 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+    color-scheme: dark;
+  }
+
+  html.light-theme {
+    color-scheme: light;
+  }
+
+  body {
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+    background-color: #06080E;
+    color: #F8FAFC;
+    overflow-x: hidden;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.light-theme body {
+    background-color: #F1F5F9;
+    color: #0F172A;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ========================================================================= */
+/* Cyber-FinTech Glass Panels                                                */
+/* ========================================================================= */
+.cyber-glass {
+  background: rgba(13, 18, 30, 0.82);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cyber-glass-subtle {
+  background: rgba(10, 14, 24, 0.68);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Solid high-opacity dropdown & floating drawer surface (prevents bleed-through over underlying content) */
+.dropdown-solid {
+  background: rgba(10, 14, 24, 0.985) !important;
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  box-shadow: 0 22px 54px -12px rgba(0, 0, 0, 0.88);
+}
+
+/* ========================================================================= */
+/* Comprehensive Light Mode — High Contrast & Zero Color Clashes             */
+/* ========================================================================= */
+html.light-theme .cyber-glass {
+  background: #FFFFFF;
+  border: 1px solid #CBD5E1;
+  box-shadow: 0 8px 24px -12px rgba(15, 23, 42, 0.1);
+}
+
+html.light-theme .cyber-glass-subtle {
+  background: #F8FAFC;
+  border: 1px solid #CBD5E1;
+}
+
+html.light-theme .dropdown-solid {
+  background: #FFFFFF !important;
+  border: 1px solid #CBD5E1 !important;
+  box-shadow: 0 22px 48px -12px rgba(15, 23, 42, 0.22) !important;
+}
+
+html.light-theme .app-shell-bg {
+  background-color: #F1F5F9 !important;
+  color: #0F172A !important;
+}
+
+html.light-theme .app-header-bar {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: #CBD5E1 !important;
+  box-shadow: 0 1px 10px -4px rgba(15, 23, 42, 0.08);
+}
+
+html.light-theme .app-bottom-nav {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border-color: #CBD5E1 !important;
+}
+
+/* Dark surface cards & inputs mapped cleanly to crisp light surfaces */
+html.light-theme .bg-\[\#05070C\],
+html.light-theme .bg-\[\#06080E\],
+html.light-theme .bg-\[\#060911\],
+html.light-theme .bg-\[\#070A12\],
+html.light-theme .bg-\[\#070B14\],
+html.light-theme .bg-\[\#080B14\],
+html.light-theme .bg-\[\#090D18\]\/90,
+html.light-theme .bg-\[\#0A0F1C\],
+html.light-theme .bg-\[\#0A0F1D\],
+html.light-theme .bg-\[\#0B0F1A\],
+html.light-theme .bg-\[\#0D1322\] {
+  background-color: #F8FAFC !important;
+  border-color: #CBD5E1 !important;
+}
+
+html.light-theme .bg-white\/5 {
+  background-color: #F1F5F9 !important;
+}
+
+html.light-theme .bg-white\/10 {
+  background-color: #E2E8F0 !important;
+}
+
+html.light-theme .border-white\/5,
+html.light-theme .border-white\/10,
+html.light-theme .border-white\/15 {
+  border-color: #CBD5E1 !important;
+}
+
+html.light-theme .bg-slate-900\/80,
+html.light-theme .bg-slate-800 {
+  background-color: #E2E8F0 !important;
+  color: #0F172A !important;
+}
+
+html.light-theme .bg-black\/30,
+html.light-theme .bg-black\/25 {
+  background-color: rgba(15, 23, 42, 0.1) !important;
+}
+
+/* Readable light-mode typography across all neutral and accent tokens */
+html.light-theme .text-white {
+  color: #0F172A;
+}
+
+html.light-theme .text-slate-100,
+html.light-theme .text-slate-200 {
+  color: #1E293B;
+}
+
+html.light-theme .text-slate-300 {
+  color: #334155;
+}
+
+html.light-theme .text-slate-400 {
+  color: #475569;
+}
+
+html.light-theme .text-cyan-200,
+html.light-theme .text-cyan-300,
+html.light-theme .text-cyan-400 {
+  color: #0E7490 !important;
+}
+
+html.light-theme .text-indigo-200,
+html.light-theme .text-indigo-300,
+html.light-theme .text-indigo-400 {
+  color: #4338CA !important;
+}
+
+html.light-theme .text-emerald-200,
+html.light-theme .text-emerald-300,
+html.light-theme .text-emerald-400 {
+  color: #047857 !important;
+}
+
+html.light-theme .text-rose-200,
+html.light-theme .text-rose-300,
+html.light-theme .text-rose-400 {
+  color: #BE123C !important;
+}
+
+html.light-theme .text-amber-200,
+html.light-theme .text-amber-300,
+html.light-theme .text-amber-400 {
+  color: #B45309 !important;
+}
+
+html.light-theme input,
+html.light-theme select,
+html.light-theme textarea {
+  color: #0F172A !important;
+}
+
+html.light-theme input::placeholder,
+html.light-theme textarea::placeholder {
+  color: #64748B !important;
+}
+
+/* Preserve crisp dark cards & solid colored CTA button text in Light Mode */
+html.light-theme .keep-dark-card {
+  background: #0F172A !important;
+  border-color: #1E293B !important;
+  color: #F8FAFC !important;
+}
+
+html.light-theme .keep-dark-card .text-white {
+  color: #FFFFFF !important;
+}
+
+html.light-theme .keep-dark-card .text-slate-300,
+html.light-theme .keep-dark-card .text-slate-400 {
+  color: #CBD5E1 !important;
+}
+
+html.light-theme .keep-dark-card .text-cyan-300,
+html.light-theme .keep-dark-card .text-cyan-400 {
+  color: #67E8F9 !important;
+}
+
+html.light-theme .keep-dark-card .text-indigo-300 {
+  color: #A5B4FC !important;
+}
+
+html.light-theme .keep-dark-card .text-emerald-400 {
+  color: #34D399 !important;
+}
+
+html.light-theme .marquee-wrapper {
+  background: #1E293B !important;
+  border-color: #334155 !important;
+}
+
+html.light-theme .marquee-wrapper .text-cyan-200,
+html.light-theme .marquee-wrapper .text-cyan-400 {
+  color: #E0F2FE !important;
+}
+
+/* Solid / Gradient interactive buttons ALWAYS preserve crisp white text */
+html.light-theme .bg-gradient-to-l.text-white,
+html.light-theme .bg-gradient-to-br.text-white,
+html.light-theme .bg-indigo-600.text-white,
+html.light-theme .bg-emerald-600.text-white,
+html.light-theme .bg-rose-600.text-white,
+html.light-theme .bg-cyan-600.text-white,
+html.light-theme .bg-amber-600.text-white,
+html.light-theme .btn-solid-white {
+  color: #FFFFFF !important;
+}
+
+html.light-theme .bg-gradient-to-l.text-white span,
+html.light-theme .bg-indigo-600.text-white span,
+html.light-theme .bg-emerald-600.text-white span,
+html.light-theme .bg-rose-600.text-white span,
+html.light-theme .bg-cyan-600.text-white span,
+html.light-theme .btn-solid-white span {
+  color: #FFFFFF !important;
+}
+
+html.light-theme .bg-emerald-950\/25 {
+  background-color: #ECFDF5 !important;
+  border-color: #10B981 !important;
+}
+
+html.light-theme .bg-rose-950\/15 {
+  background-color: #FFF1F2 !important;
+  border-color: #FB7185 !important;
+}
+
+html.light-theme .bg-amber-500\/10,
+html.light-theme .bg-amber-500\/15,
+html.light-theme .bg-amber-500\/20 {
+  background-color: #FEF3C7 !important;
+}
+
+/* Subtle hover lift on catalog cards */
+.cyber-card-3d {
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.cyber-card-3d:hover {
+  transform: translateY(-2px);
+  border-color: rgba(6, 182, 212, 0.45);
+}
+
+/* Live OTP Radar Dot */
+@keyframes pulse-radar {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.65);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(6, 182, 212, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(6, 182, 212, 0);
+  }
+}
+
+.radar-dot {
+  animation: pulse-radar 2s infinite;
+}
+
+/* Rightward Moving Announcement Ticker */
+@keyframes marquee-right {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100vw);
+  }
+}
+
+.marquee-track {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  will-change: transform;
+  animation: marquee-right 22s linear infinite;
+}
+
+.marquee-track.marquee-slow {
+  animation-duration: 34s;
+}
+
+.marquee-track.marquee-normal {
+  animation-duration: 22s;
+}
+
+.marquee-track.marquee-fast {
+  animation-duration: 13s;
+}
+
+.marquee-track.marquee-paused,
+.marquee-wrapper:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+/* Subtle Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(6, 182, 212, 0.6);
+}
+
+/* ========================================================================= */
+/* Native Android Luxury App Experience (< 1024px & Standalone PWA)          */
+/* ========================================================================= */
+@media (max-width: 1023px) {
+  body {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: contain;
+    touch-action: manipulation;
+  }
+
+  .android-app-bar {
+    padding-top: env(safe-area-inset-top, 0px);
+    box-shadow: 0 4px 20px -8px rgba(0, 0, 0, 0.55);
+  }
+
+  .android-bottom-nav {
+    padding-bottom: max(env(safe-area-inset-bottom, 0px), 6px);
+    box-shadow: 0 -10px 30px -12px rgba(0, 0, 0, 0.7);
+  }
+
+  html.light-theme .android-bottom-nav {
+    box-shadow: 0 -6px 24px -10px rgba(15, 23, 42, 0.14);
+  }
+
+  .android-nav-pill {
+    transition: background-color 0.2s cubic-bezier(0.2, 0, 0, 1), transform 0.15s ease;
+  }
+
+  .android-card {
+    border-radius: 1.25rem;
+  }
+}
+
+/* Hide footer strictly on mobile viewports & mobile standalone PWA, NEVER on desktop */
+@media (max-width: 767px) and (display-mode: standalone) {
+  footer {
+    display: none !important;
+  }
+}
+
+/* 3D Hero Slider Perspective Utilities */
+.slider-3d-stage {
+  perspective: 1400px;
+  perspective-origin: 50% 50%;
+}
+
+.slider-3d-slide {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform, opacity;
+  transition: transform 780ms cubic-bezier(0.22, 1, 0.36, 1), opacity 620ms ease, filter 620ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slider-3d-slide {
+    transition: opacity 250ms ease !important;
+  }
+}
+
+
